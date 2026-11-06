@@ -92,3 +92,41 @@
     (ok (>= (/ local trials) 99/100) (format nil "locality ~D/~D" local trials))
     (ok (>= (/ detected trials) 99/100) (format nil "detected ~D/~D" detected trials))
     (ok (>= (/ near trials) 3/4) (format nil "fix within 2 lines ~D/~D" near trials))))
+
+;;; Random structural operations on clean files: every attempt either yields
+;;; a clean, verified result or signals a typed EDIT-ERROR.
+
+(defparameter *random-operations*
+  (list (lambda (ps n) (delete-node ps n))
+        (lambda (ps n) (wrap-node ps n "progn"))
+        (lambda (ps n) (splice-node ps n))
+        (lambda (ps n) (raise-node ps n))
+        (lambda (ps n) (slurp-forward ps n))
+        (lambda (ps n) (slurp-backward ps n))
+        (lambda (ps n) (barf-forward ps n))
+        (lambda (ps n) (barf-backward ps n))
+        (lambda (ps n) (transpose-nodes ps n))
+        (lambda (ps n) (insert-after ps n "(inserted 1)"))
+        (lambda (ps n) (replace-node ps n "(replaced)"))))
+
+(deftest random-operations-keep-files-clean
+  (let ((seed 6577) (ok 0) (refused 0) (unclean '()))
+    (flet ((next (n) (mod (setf seed (mod (+ (* seed 1103515245) 12345) 2147483648)) n)))
+      (dolist (f (corpus-files))
+        (let ((ps (read-source-file f))
+              (nodes '()))
+          (when (parsed-source-clean-p ps)
+            (walk-nodes (lambda (n) (when (and (expression-node-p n) (node-parent n)) (push n nodes)))
+                        (parsed-source-nodes ps))
+            (let ((nodes (coerce nodes 'vector)))
+              (dotimes (k (min 20 (length nodes)))
+                (let ((node (aref nodes (next (length nodes))))
+                      (op (nth (next (length *random-operations*)) *random-operations*)))
+                  (handler-case
+                      (let ((new (verify-plan (funcall op ps node))))
+                        (if (parsed-source-clean-p new)
+                            (incf ok)
+                            (push (namestring f) unclean)))
+                    (edit-error () (incf refused))))))))))
+    (ok (plusp ok) (format nil "~D verified, ~D refused" ok refused))
+    (ok (null unclean) (format nil "no unclean results~@[: ~{~A~^, ~}~]" (subseq unclean 0 (min 3 (length unclean)))))))

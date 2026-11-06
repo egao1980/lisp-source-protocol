@@ -121,4 +121,58 @@
    #:lint-context
    #:lint-context-model
    #:lint-context-parsed
-   #:make-lint-diagnostic))
+   #:make-lint-diagnostic
+   ;; edit
+   #:edit-error
+   #:edit-input-unreadable
+   #:edit-input-text
+   #:edit-input-diagnostics
+   #:edit-would-unbalance
+   #:edit-error-plan
+   #:edit-error-reason
+   #:edit-error-diagnostics
+   #:edit-error-imbalances
+   #:edit-error-node
+   #:edit-error-operation
+   #:stale-source
+   #:stale-source-expected
+   #:stale-source-actual
+   #:edit-on-recovered-node
+   #:edit-not-applicable
+   #:text-edit
+   #:make-text-edit
+   #:text-edit-start
+   #:text-edit-end
+   #:text-edit-replacement
+   #:edit-plan
+   #:edit-plan-parsed
+   #:edit-plan-edits
+   #:edit-plan-form-delta
+   #:edit-plan-operation
+   #:apply-text-edits
+   #:plan-text
+   #:verify-plan
+   #:read-edit-input
+   #:replace-node
+   #:insert-before
+   #:insert-after
+   #:delete-node
+   #:wrap-node
+   #:splice-node
+   #:raise-node
+   #:slurp-forward
+   #:slurp-backward
+   #:barf-forward
+   #:barf-backward
+   #:transpose-nodes
+   #:rename-symbol
+   #:add-export
+   #:repair-parens
+   ;; commit
+   #:unified-diff
+   #:commit-plan
+   #:edit-result
+   #:edit-result-plan
+   #:edit-result-parsed
+   #:edit-result-diff
+   #:edit-result-written-p))

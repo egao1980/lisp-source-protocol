@@ -32,6 +32,29 @@ Lossless Common Lisp source trees on [Eclector](https://github.com/s-expressioni
 | `lint` / `*lint-rules*` / `run-lint-rule` | `:unused-variable` `:missing-in-package` `:undefined-export` `:missing-docstring` `:asd-missing-component`; add a rule with an `eql` method |
 | `*source-features*` | feature list for `#+`/`#-` (default host `*features*`), compared by name |
 
+## Structural editing
+
+Operations never write text: each returns an `edit-plan` (non-overlapping replacements + expected top-level form delta). `verify-plan` re-reads the result and signals `edit-would-unbalance` if it adds a reader error or imbalance, or changes the form count unexpectedly. `commit-plan` verifies, checks `:expected-hash` and the file on disk (`stale-source`, `continue` restart), writes atomically and returns an `edit-result` with a unified diff.
+
+```lisp
+(let* ((ps (stack-lisp-source:read-source-file "src/foo.lisp"))
+       (node (stack-lisp-source:locate ps '(:definition "defun" "frob"))))
+  (stack-lisp-source:commit-plan
+   (stack-lisp-source:replace-node ps node "(defun frob (x) (1+ x))")
+   :expected-hash (stack-lisp-source:parsed-source-hash ps)))
+```
+
+| Ops | |
+|-----|--|
+| `replace-node` `insert-before` `insert-after` `delete-node` | input text must read clean (`edit-input-unreadable`); continuation lines indented to the node's column |
+| `wrap-node` `splice-node` `raise-node` `transpose-nodes` | |
+| `slurp-forward` / `-backward`, `barf-forward` / `-backward` | proper `(…)` lists only |
+| `rename-symbol` | one plan per file; keeps package prefixes and case style; covers `defpackage` designators |
+| `add-export` | appends in the existing designator style, or adds an `(:export …)` option |
+| `repair-parens` | applies an `imbalance` fix; accepted only if problems decrease |
+
+Refused with `edit-not-applicable`: sibling edits under `#+`/`#-`, quote or backquote prefixes, the consing dot, dotted lists. Nodes built by recovery signal `edit-on-recovered-node` (`continue` to force).
+
 ## Test
 
 ```bash
@@ -41,7 +64,7 @@ LISP_SOURCE_CORPUS=~/Projects/cl-workspace ros run -- --dynamic-space-size 4096 
   --non-interactive --eval '(asdf:test-system "lisp-source-protocol")'
 ```
 
-Workspace run (2026-11-06): 2,894 files fully covered; 24,922 single-paren mutations — 99.6 % keep every other top-level form byte-identical, 100 % detected, 91.6 % fix within 2 lines.
+Workspace run (2026-11-06): 2,906 files fully covered; 25,042 single-paren mutations — 99.7 % keep every other top-level form byte-identical, 100 % detected, 91.5 % fix within 2 lines; 34,256 random structural operations verified, none left a file unclean.
 
 ## License
 
