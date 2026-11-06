@@ -15,7 +15,9 @@
                (:file "scan")
                (:file "reader")
                (:file "locate")
-               (:file "outline"))
+               (:file "outline")
+               (:file "packages")
+               (:file "lint"))
   :in-order-to ((test-op (test-op "lisp-source-protocol/tests"))))
 
 (defsystem "lisp-source-protocol/tests"
@@ -26,6 +28,7 @@
                (:file "reader-test")
                (:file "recovery-test")
                (:file "locate-test")
+               (:file "analysis-test")
                (:file "corpus-test"))
   :perform (test-op (o c)
              (unless (symbol-call :rove :run c)

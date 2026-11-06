@@ -91,4 +91,34 @@
    #:outline-entry-docstring
    #:outline-entry-lambda-list
    #:outline-entry-package
-   #:outline))
+   #:outline
+   ;; packages
+   #:package-info
+   #:package-info-name
+   #:package-info-nicknames
+   #:package-info-use
+   #:package-info-exports
+   #:package-info-shadows
+   #:package-info-imports
+   #:package-info-local-nicknames
+   #:package-info-node
+   #:package-info-source
+   #:package-model
+   #:package-model-sources
+   #:build-package-model
+   #:find-package-info
+   #:canonical-package-name
+   #:source-packages
+   #:package-at
+   #:resolve-symbol-token
+   #:node-symbol-identity
+   #:find-references
+   #:find-definitions
+   ;; lint
+   #:*lint-rules*
+   #:lint
+   #:run-lint-rule
+   #:lint-context
+   #:lint-context-model
+   #:lint-context-parsed
+   #:make-lint-diagnostic))
