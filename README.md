@@ -27,6 +27,9 @@ Lossless Common Lisp source trees on [Eclector](https://github.com/s-expressioni
 | `node-kind` / `-start` / `-end` / `-children` / `-forms` / `-parent` / `-path` / `-text` / `-hash` / `-recovered-p` | node accessors |
 | `locate` | `(:path 0 2)`, `(:offset n)`, `(:line l :column c)`, `(:definition "defmethod" "print-object" "(my-class t)")`, `(:hash h)`; `ambiguous-locator` offers `use-value` |
 | `outline` | top-level definitions with docstring, lambda list, package |
+| `build-package-model` / `resolve-symbol-token` / `package-at` | static package model from `defpackage` / `define-package` (`:use`, `:import-from`, `:shadow`, `:local-nicknames`, nicknames); host packages via `find-package` (lookup only) |
+| `find-references` / `find-definitions` | across sources, by resolved package + name; includes `defpackage` designators |
+| `lint` / `*lint-rules*` / `run-lint-rule` | `:unused-variable` `:missing-in-package` `:undefined-export` `:missing-docstring` `:asd-missing-component`; add a rule with an `eql` method |
 | `*source-features*` | feature list for `#+`/`#-` (default host `*features*`), compared by name |
 
 ## Test
