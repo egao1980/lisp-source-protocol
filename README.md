@@ -46,14 +46,26 @@ Operations never write text: each returns an `edit-plan` (non-overlapping replac
 
 | Ops | |
 |-----|--|
-| `replace-node` `insert-before` `insert-after` `delete-node` | input text must read clean (`edit-input-unreadable`); continuation lines indented to the node's column |
-| `wrap-node` `splice-node` `raise-node` `transpose-nodes` | |
+| `replace-node` `insert-before` `insert-after` `delete-node` | input text must read clean (`edit-input-unreadable`); inserted code is re-indented at the node's column (see below) |
+| `wrap-node` `splice-node` `raise-node` `transpose-nodes` | `wrap-node` re-indents the wrapped form |
+| `move-node` | to before/after a target form, in the same file (one plan) or another (two plans: verify both, then commit) |
 | `slurp-forward` / `-backward`, `barf-forward` / `-backward` | proper `(…)` lists only |
 | `rename-symbol` | one plan per file; keeps package prefixes and case style; covers `defpackage` designators |
 | `add-export` | appends in the existing designator style, or adds an `(:export …)` option |
 | `repair-parens` | applies an `imbalance` fix; accepted only if problems decrease |
 
 Refused with `edit-not-applicable`: sibling edits under `#+`/`#-`, quote or backquote prefixes, the consing dot, dotted lists. Nodes built by recovery signal `edit-on-recovered-node` (`continue` to force).
+
+## Indentation
+
+Code an edit inserts goes through `indent-code` (`*reindent*` nil only shifts continuation lines). The rules follow the Emacs/SLIME style:
+
+- an operator with *N* distinguished arguments indents them by 4 and its body by 2: `defun` 2, `let` 1, `handler-case` (clauses get their own body indent), `flet`/`labels` (local definitions), unknown `def*` 2, `with-*` / `do-*` 1;
+- a call aligns its arguments with the first argument on the operator's line (or with a keyword/value run there), else one past the paren;
+- data (quoted lists, vectors, keyword or non-symbol heads) aligns with the first element; `loop` keeps the input's clause layout;
+- lines starting inside a string or `#|…|#` are untouched.
+
+`set-indentation` takes an integer or a Swank-style spec (`(4 4 &body)`); `learn-indentation` reads the `&body` position of every `defmacro` in a set of sources; `reset-indentation` restores the table. On this repo's and the cl-stack protocol sources, 85 % of top-level forms re-indent to exactly their current text; the rest are mostly calls to project macros.
 
 ## Test
 
@@ -64,7 +76,7 @@ LISP_SOURCE_CORPUS=~/Projects/cl-workspace ros run -- --dynamic-space-size 4096 
   --non-interactive --eval '(asdf:test-system "lisp-source-protocol")'
 ```
 
-Workspace run (2026-11-06): 2,906 files fully covered; 25,042 single-paren mutations — 99.7 % keep every other top-level form byte-identical, 100 % detected, 91.5 % fix within 2 lines; 34,256 random structural operations verified, none left a file unclean.
+Workspace run (2026-11-06): 2,906 files fully covered; 25,042 single-paren mutations — 99.7 % keep every other top-level form byte-identical, 100 % detected, 91.5 % fix within 2 lines; 34,256 random structural operations verified, none left a file unclean. 0.2.0 (2026-11-07), with move, re-indenting wrap and multi-line replace added to the random set: 39,875 verified, 15,708 refused, none unclean.
 
 ## License
 

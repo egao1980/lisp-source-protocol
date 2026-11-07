@@ -79,7 +79,13 @@
 
 (defun apply-text-edits (string edits)
   "STRING with EDITS applied. EDITS must not overlap."
-  (let ((sorted (sort (copy-list edits) #'< :key #'text-edit-start))
+  (let ((sorted (stable-sort (copy-list edits)
+                             (lambda (a b)
+                               ;; at the same offset an insertion goes before a replacement
+                               (or (< (text-edit-start a) (text-edit-start b))
+                                   (and (= (text-edit-start a) (text-edit-start b))
+                                        (= (text-edit-start a) (text-edit-end a))
+                                        (/= (text-edit-start b) (text-edit-end b)))))))
         (pos 0))
     (loop for (a b) on sorted
           when (and b (> (text-edit-end a) (text-edit-start b)))
@@ -170,6 +176,16 @@ EDIT-INPUT-UNREADABLE. MIN / MAX bound the number of forms."
          (line-start (1+ (or (position #\Newline s :end (node-start node) :from-end t) -1))))
     (every (lambda (c) (member c '(#\Space #\Tab))) (subseq s line-start (node-start node)))))
 
+(defvar *reindent* t
+  "When true, code an edit inserts is re-indented with INDENT-CODE; when NIL,
+its continuation lines are only shifted to the target column.")
+
+(defun place-code (text column &key (input-column 0))
+  "TEXT laid out to start at COLUMN."
+  (if *reindent*
+      (indent-code text :column column :input-column input-column)
+      (indent-continuation (dedent-continuation text input-column) column)))
+
 (defun indent-continuation (text column)
   "Shift every line of TEXT after the first right by COLUMN spaces."
   (if (zerop column)
@@ -251,8 +267,8 @@ dotted lists have no free positions to edit."
   (read-edit-input new-text :min 1 :max 1)
   (plan parsed :replace
         (list (make-text-edit (node-start node) (node-end node)
-                              (indent-continuation (string-trim '(#\Space #\Tab #\Newline) new-text)
-                                                   (node-column node))))))
+                              (place-code (string-trim '(#\Space #\Tab #\Newline) new-text)
+                                          (node-column node))))))
 
 (defun separator-for (node)
   "Whitespace placed between NODE and an inserted sibling."
@@ -288,7 +304,7 @@ dotted lists have no free positions to edit."
         (column (if (top-level-node-p node) 0 (node-column node))))
     (with-output-to-string (out)
       (loop for (f . more) on forms
-            do (write-string (indent-continuation (node-text f) column) out)
+            do (write-string (place-code (node-text f) column :input-column (node-column f)) out)
                (when more (write-string sep out))))))
 
 (defun delete-node (parsed node)
@@ -317,10 +333,16 @@ dotted lists have no free positions to edit."
     (error 'edit-not-applicable :operation :wrap :node node :reason "the consing dot"))
   ;; HEAD is a prefix: operator plus any leading arguments.
   (when head (read-edit-input head :min 1))
-  (plan parsed :wrap
-        (list (make-text-edit (node-start node) (node-start node)
-                              (if head (format nil "(~A " (string-trim " " head)) "("))
-              (make-text-edit (node-end node) (node-end node) ")"))))
+  (let ((open (if head (format nil "(~A " (string-trim " " head)) "(")))
+    (plan parsed :wrap
+          (if *reindent*
+              (let ((column (node-column node)))
+                (list (make-text-edit (node-start node) (node-end node)
+                                      (indent-code (concatenate 'string open (node-text node) ")")
+                                                   :column column
+                                                   :input-column (- column (length open))))))
+              (list (make-text-edit (node-start node) (node-start node) open)
+                    (make-text-edit (node-end node) (node-end node) ")"))))))
 
 (defun splice-node (parsed node)
   "Replace list NODE by its elements."
@@ -415,6 +437,39 @@ dotted lists have no free positions to edit."
     (plan parsed :transpose
           (list (make-text-edit (node-start node) (node-end node) (node-text next))
                 (make-text-edit (node-start next) (node-end next) (node-text node))))))
+
+(defun node-ancestor-p (ancestor node)
+  (loop for p = (node-parent node) then (node-parent p)
+        while p
+        thereis (eq p ancestor)))
+
+(defun move-node (parsed node target-parsed target &key (where :after))
+  "Move NODE next to TARGET (WHERE is :AFTER or :BEFORE), which may be in
+another source. Returns a list of plans: one when both are in PARSED, else
+the deletion from PARSED and the insertion into TARGET-PARSED. Verify every
+plan before committing any."
+  (ensure-editable node :move)
+  (ensure-sibling-context node :move)
+  (ensure-editable target :move)
+  (ensure-sibling-context target :move)
+  (let ((same (eq parsed target-parsed)))
+    (when (eq node target)
+      (error 'edit-not-applicable :operation :move :node node :reason "target is the form itself"))
+    (when (and same (node-ancestor-p node target))
+      (error 'edit-not-applicable :operation :move :node node :reason "target is inside the form"))
+    (let* ((text (dedent-continuation (node-text node) (node-column node)))
+           (removal (delete-node parsed node))
+           (insertion (ecase where
+                        (:after (insert-after target-parsed target text))
+                        (:before (insert-before target-parsed target text)))))
+      (if same
+          (list (plan parsed :move
+                      (append (edit-plan-edits removal) (edit-plan-edits insertion))
+                      :form-delta (+ (edit-plan-form-delta removal) (edit-plan-form-delta insertion))))
+          (list (plan parsed :move (edit-plan-edits removal)
+                      :form-delta (edit-plan-form-delta removal))
+                (plan target-parsed :move (edit-plan-edits insertion)
+                      :form-delta (edit-plan-form-delta insertion)))))))
 
 ;;; Symbol-level operations
 

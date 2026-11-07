@@ -122,6 +122,14 @@
    #:lint-context-model
    #:lint-context-parsed
    #:make-lint-diagnostic
+   ;; indent
+   #:*indentation*
+   #:set-indentation
+   #:reset-indentation
+   #:operator-indentation
+   #:indent-code
+   #:learn-indentation
+   #:*reindent*
    ;; edit
    #:edit-error
    #:edit-input-unreadable
@@ -165,6 +173,7 @@
    #:barf-forward
    #:barf-backward
    #:transpose-nodes
+   #:move-node
    #:rename-symbol
    #:add-export
    #:repair-parens
