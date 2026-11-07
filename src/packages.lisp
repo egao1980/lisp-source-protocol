@@ -29,6 +29,11 @@
                   :documentation "Cache for lint: names defined across SOURCES."))
   (:documentation "Packages declared across a set of PARSED-SOURCEs."))
 
+(defun package-model-packages (model)
+  "Distinct PACKAGE-INFOs declared in MODEL's sources, sorted by name."
+  (sort (remove-duplicates (alexandria:hash-table-values (package-model-table model)))
+        #'string< :key #'package-info-name))
+
 (defparameter *defpackage-operators*
   '("DEFPACKAGE" "DEFINE-PACKAGE"))
 

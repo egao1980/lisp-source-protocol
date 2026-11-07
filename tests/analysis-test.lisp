@@ -110,3 +110,9 @@
                   (parsed-source-forms parsed))
       out))
   (ok (equal (lint-kinds "(progn (eval x))" :rules '(:test-no-eval)) '(:test-no-eval))))
+
+(deftest package-model-lists-packages
+  (let* ((a (read-source "(defpackage #:zeta (:use #:cl) (:nicknames #:z))"))
+         (b (read-source "(defpackage #:alpha (:use #:cl))"))
+         (names (mapcar #'package-info-name (package-model-packages (build-package-model (list a b))))))
+    (ok (equal names '("ALPHA" "ZETA")))))

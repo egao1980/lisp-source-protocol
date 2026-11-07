@@ -105,6 +105,7 @@
    #:package-info-source
    #:package-model
    #:package-model-sources
+   #:package-model-packages
    #:build-package-model
    #:find-package-info
    #:canonical-package-name
