@@ -1,9 +1,9 @@
 (defsystem "lisp-source-protocol"
-  :version "0.1.0"
+  :version "0.2.0"
   :description "Lossless Eclector CST, heuristic recovery and static analysis for Common Lisp source"
   :author "egao1980"
   :license "MIT"
-  :depends-on ("eclector" "alexandria")
+  :depends-on ("eclector" "alexandria" "uiop")
   :serial t
   :pathname "src"
   :components ((:file "package")
@@ -18,6 +18,7 @@
                (:file "outline")
                (:file "packages")
                (:file "lint")
+               (:file "indent")
                (:file "edit")
                (:file "commit"))
   :in-order-to ((test-op (test-op "lisp-source-protocol/tests"))))
@@ -32,6 +33,7 @@
                (:file "locate-test")
                (:file "analysis-test")
                (:file "edit-test")
+               (:file "indent-test")
                (:file "corpus-test"))
   :perform (test-op (o c)
              (unless (symbol-call :rove :run c)

@@ -107,7 +107,11 @@
         (lambda (ps n) (barf-backward ps n))
         (lambda (ps n) (transpose-nodes ps n))
         (lambda (ps n) (insert-after ps n "(inserted 1)"))
-        (lambda (ps n) (replace-node ps n "(replaced)"))))
+        (lambda (ps n) (replace-node ps n "(replaced)"))
+        (lambda (ps n) (replace-node ps n (format nil "(when x~%(a)~%(b))")))
+        (lambda (ps n) (wrap-node ps n "let ((x 1))"))
+        (lambda (ps n) (first (move-node ps n ps (first (parsed-source-forms ps)))))
+        (lambda (ps n) (first (move-node ps n ps (car (last (parsed-source-forms ps))) :where :before)))))
 
 (deftest random-operations-keep-files-clean
   (let ((seed 6577) (ok 0) (refused 0) (unclean '()))
