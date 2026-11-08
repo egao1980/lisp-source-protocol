@@ -88,6 +88,8 @@
      ((lines "(defun a ()" "  1)" "" "(defun b ()" "  2)")
       '(0) '(1) :after
       (lines "(defun b ()" "  2)" "" "(defun a ()" "  1)"))
+     ((lines ";; about a" "(a)" "" "(b)") '(0) '(1) :after (lines "(b)" "" ";; about a" "(a)"))
+     ((lines "(b)" "" ";; about a" "(a)") '(1) '(0) :before (lines ";; about a" "(a)" "" "(b)"))
      ((lines "(let ()" "  (when x" "    (f)))" "(g)")
       '(0 2) '(1) :after
       (lines "(let ())" "(g)" "" "(when x" "  (f))")))

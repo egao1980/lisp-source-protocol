@@ -206,6 +206,35 @@ its continuation lines are only shifted to the target column.")
   (let ((p (position-if-not #'ws-char-p s :end pos :from-end t)))
     (if p (1+ p) 0)))
 
+(defun line-start (s pos)
+  "Offset of the start of the line holding POS."
+  (let ((nl (position #\Newline s :end pos :from-end t)))
+    (if nl (1+ nl) 0)))
+
+(defun comment-line-p (s from to)
+  "True when S[FROM, TO) is blanks then a ; comment."
+  (let ((first (position-if-not (lambda (c) (member c '(#\Space #\Tab))) s :start from :end to)))
+    (and first (char= (char s first) #\;))))
+
+(defun leading-comment-start (node)
+  "Where a top-level NODE begins once the ; comment lines directly above it
+(no blank line in between) count as part of it; NODE-START otherwise. Delete,
+transpose and move carry those comments with the form."
+  (let* ((s (node-string node))
+         (start (node-start node))
+         (begin (line-start s start)))
+    (when (or (not (top-level-node-p node))
+              (find-if-not #'ws-char-p s :start begin :end start))
+      (return-from leading-comment-start start))
+    ;; BEGIN is the start of NODE's line; step back one line at a time
+    (loop while (plusp begin)
+          do (let* ((prev-end (1- begin))
+                    (prev (line-start s prev-end)))
+               (if (comment-line-p s prev prev-end)
+                   (setf begin prev)
+                   (return))))
+    (if (< begin (line-start s start)) begin start)))
+
 (defun sibling-forms (node)
   (node-forms (node-parent node)))
 
@@ -317,8 +346,19 @@ dotted lists have no free positions to edit."
          (after (skip-ws-forward s end))
          (closer-next (and (< after (length s)) (char= (char s after) #\))))
          (prev (previous-sibling node)))
+    (when (and (top-level-node-p node) prev (null (next-sibling node)))
+      ;; the last top-level form: take the blank lines before it too, keep
+      ;; the file's final newline
+      (return-from delete-node
+        (plan parsed :delete
+              (list (make-text-edit (skip-ws-backward s (leading-comment-start node)) after
+                                    (if (and (= after (length s)) (plusp after)
+                                             (char= (char s (1- after)) #\Newline))
+                                        (string #\Newline)
+                                        "")))
+              :form-delta -1)))
     (multiple-value-bind (del-start del-end)
-        (cond ((top-level-node-p node) (values start after))
+        (cond ((top-level-node-p node) (values (leading-comment-start node) after))
               ((or closer-next (null (next-sibling node)))
                ;; last element: eat the whitespace before it, keep the closer in place
                (values (if prev (node-end prev) (skip-ws-backward s start)) end))
@@ -442,9 +482,12 @@ HEAD's operator; a one-line NODE stays on HEAD's line."
     (unless next
       (error 'edit-not-applicable :operation :transpose :node node :reason "no next sibling"))
     (ensure-editable next :transpose)
-    (plan parsed :transpose
-          (list (make-text-edit (node-start node) (node-end node) (node-text next))
-                (make-text-edit (node-start next) (node-end next) (node-text node))))))
+    (let ((s (node-string node))
+          (a (leading-comment-start node))
+          (b (leading-comment-start next)))
+      (plan parsed :transpose
+            (list (make-text-edit a (node-end node) (subseq s b (node-end next)))
+                  (make-text-edit b (node-end next) (subseq s a (node-end node))))))))
 
 (defun node-ancestor-p (ancestor node)
   (loop for p = (node-parent node) then (node-parent p)
@@ -467,9 +510,21 @@ plan before committing any."
       (error 'edit-not-applicable :operation :move :node node :reason "target is inside the form"))
     (let* ((text (dedent-continuation (node-text node) (node-column node)))
            (removal (delete-node parsed node))
-           (insertion (ecase where
-                        (:after (insert-after target-parsed target text))
-                        (:before (insert-before target-parsed target text)))))
+           (insertion (if (and (top-level-node-p node) (top-level-node-p target))
+                          ;; whole lines, leading comments included: the
+                          ;; forms reader would drop the comments
+                          (let ((chunk (subseq (node-string node) (leading-comment-start node) (node-end node))))
+                            (read-edit-input text)
+                            (plan target-parsed :insert
+                                  (list (ecase where
+                                          (:after (make-text-edit (node-end target) (node-end target)
+                                                                  (format nil "~%~%~A" chunk)))
+                                          (:before (let ((at (leading-comment-start target)))
+                                                     (make-text-edit at at (format nil "~A~%~%" chunk))))))
+                                  :form-delta 1))
+                          (ecase where
+                            (:after (insert-after target-parsed target text))
+                            (:before (insert-before target-parsed target text))))))
       (if same
           (list (plan parsed :move
                       (append (edit-plan-edits removal) (edit-plan-edits insertion))
