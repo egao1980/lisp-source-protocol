@@ -140,6 +140,8 @@ packages through FIND-PACKAGE (lookup only), otherwise NAME itself."
     name))
 
 (defun package-exports-p (model package-name symbol-name)
+  "True when PACKAGE-NAME exports SYMBOL-NAME: from its declaration in MODEL,
+else from a host package of that name."
   (let ((info (find-package-info model package-name)))
     (if info
         (member symbol-name (package-info-exports info) :test #'string=)

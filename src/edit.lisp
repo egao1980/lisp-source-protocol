@@ -327,20 +327,28 @@ dotted lists have no free positions to edit."
             :form-delta (if (top-level-node-p node) -1 0)))))
 
 (defun wrap-node (parsed node head)
-  "Wrap NODE in a new list (HEAD NODE). HEAD may be NIL for a bare (NODE)."
+  "Wrap NODE in a new list (HEAD NODE). HEAD may be NIL for a bare (NODE).
+A multi-line NODE starts on its own line under HEAD, indented as the body of
+HEAD's operator; a one-line NODE stays on HEAD's line."
   (ensure-editable node :wrap)
   (when (consing-dot-node-p node)
     (error 'edit-not-applicable :operation :wrap :node node :reason "the consing dot"))
   ;; HEAD is a prefix: operator plus any leading arguments.
   (when head (read-edit-input head :min 1))
-  (let ((open (if head (format nil "(~A " (string-trim " " head)) "(")))
+  (let* ((head (and head (string-trim " " head)))
+         (multi-line (and head *reindent* (find #\Newline (node-text node))))
+         (open (cond (multi-line (format nil "(~A~%" head))
+                     (head (format nil "(~A " head))
+                     (t "("))))
     (plan parsed :wrap
           (if *reindent*
               (let ((column (node-column node)))
                 (list (make-text-edit (node-start node) (node-end node)
                                       (indent-code (concatenate 'string open (node-text node) ")")
                                                    :column column
-                                                   :input-column (- column (length open))))))
+                                                   :input-column (if multi-line
+                                                                     column
+                                                                     (- column (length open)))))))
               (list (make-text-edit (node-start node) (node-start node) open)
                     (make-text-edit (node-end node) (node-end node) ")"))))))
 
