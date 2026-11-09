@@ -60,8 +60,15 @@
   (ok (equal (run-op (lines "(defun f ()" "  (old))") '(0 3) #'replace-node
                      (lines "(when x" "(foo)" "(bar))"))
              (lines "(defun f ()" "  (when x" "    (foo)" "    (bar)))")))
+  ;; a multi-line form goes on its own line, as the body of the new head
   (ok (equal (run-op (lines "(defun f ()" "  (foo a" "       b))") '(0 3) #'wrap-node "when x")
-             (lines "(defun f ()" "  (when x (foo a" "               b)))")))
+             (lines "(defun f ()" "  (when x" "    (foo a" "         b)))")))
+  (ok (equal (run-op (lines "(defun f ()" "  (foo a b))") '(0 3) #'wrap-node "when x")
+             (lines "(defun f ()" "  (when x (foo a b)))")))
+  (ok (equal (run-op (lines "(defun g (x)" "  \"Doc." "line two.\"" "  x)") '(0) #'wrap-node
+                     "eval-when (:compile-toplevel :load-toplevel :execute)")
+             (lines "(eval-when (:compile-toplevel :load-toplevel :execute)"
+                    "  (defun g (x)" "    \"Doc." "line two.\"" "    x))")))
   (ok (equal (let ((*reindent* nil))
                (run-op (lines "(defun f ()" "  (old))") '(0 3) #'replace-node (lines "(a" " b)")))
              (lines "(defun f ()" "  (a" "   b))"))))
@@ -81,6 +88,8 @@
      ((lines "(defun a ()" "  1)" "" "(defun b ()" "  2)")
       '(0) '(1) :after
       (lines "(defun b ()" "  2)" "" "(defun a ()" "  1)"))
+     ((lines ";; about a" "(a)" "" "(b)") '(0) '(1) :after (lines "(b)" "" ";; about a" "(a)"))
+     ((lines "(b)" "" ";; about a" "(a)") '(1) '(0) :before (lines ";; about a" "(a)" "" "(b)"))
      ((lines "(let ()" "  (when x" "    (f)))" "(g)")
       '(0 2) '(1) :after
       (lines "(let ())" "(g)" "" "(when x" "  (f))")))

@@ -109,6 +109,7 @@
    #:build-package-model
    #:find-package-info
    #:canonical-package-name
+   #:package-exports-p
    #:source-packages
    #:package-at
    #:resolve-symbol-token

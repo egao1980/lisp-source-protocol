@@ -18,6 +18,15 @@
      ("(a b c)" '(0 2) #'delete-node '() "(a b)")
      ((lines "(foo a" "     b)") '(0 2) #'delete-node '() "(foo a)")
      ((lines "(a)" "" "(b)" "") '(0) #'delete-node '() (lines "(b)" ""))
+     ;; the ; comment lines right above a top-level form go with it
+     ((lines ";; about a" "(a)" "" "(b)") '(0) #'delete-node '() "(b)")
+     ((lines "(a)" "" ";; about b" "(b)") '(0) #'transpose-nodes '()
+      (lines ";; about b" "(b)" "" "(a)"))
+     ;; ...but not a comment separated by a blank line, or one inside a list
+     ((lines ";; header" "" "(a)" "" "(b)") '(0) #'delete-node '() (lines ";; header" "" "(b)"))
+     ((lines "(a" " ;; about b" " b c)") '(0 1) #'delete-node '() (lines "(a" " ;; about b" " c)"))
+     ;; the last top-level form takes the blank lines before it; the final newline stays
+     ((lines "(a)" "" ";; about b" "(b)" "") '(1) #'delete-node '() (lines "(a)" ""))
      ("(a b)" '(0 1) #'wrap-node '("when x") "(a (when x b))")
      ("(a b)" '(0 1) #'wrap-node '(nil) "(a (b))")
      ("(a (b c) d)" '(0 1) #'splice-node '() "(a b c d)")
