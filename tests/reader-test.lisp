@@ -87,3 +87,12 @@
     (ok (equal (mapcar #'outline-entry-docstring entries) '(nil "Doc." nil "K" "V")))
     (ok (equal (outline-entry-lambda-list (second entries)) "(a &key b)"))
     (ok (every (lambda (e) (equal (outline-entry-package e) "FOO")) (rest entries)))))
+
+(deftest script-header-line-is-not-read
+  "A #! first line (Roswell .ros, sbcl --script) is not Lisp: the file reads
+clean, the forms after it are found, and the text round-trips."
+  (let* ((text (format nil "#!/bin/sh~%#|~%exec ros -Q -- $0 \"$@\"~%|#~%(defun main () 1)~%"))
+         (ps (read-source text)))
+    (ok (parsed-source-clean-p ps))
+    (ok (= 1 (length (parsed-source-forms ps))))
+    (ok (string= text (source-string (parsed-source-text ps))))))

@@ -1,5 +1,5 @@
 (defsystem "lisp-source-protocol"
-  :version "0.2.1"
+  :version "0.2.2"
   :description "Lossless Eclector CST, heuristic recovery and static analysis for Common Lisp source"
   :author "egao1980"
   :license "MIT"

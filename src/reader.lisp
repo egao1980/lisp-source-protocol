@@ -213,6 +213,14 @@ at column 0, so the damage spans [anchor start, stray)."
                 nodes)
     (nreverse out)))
 
+(defun script-header-end (string)
+  "End of a leading #! line (a Roswell or SBCL --script file), or 0. The line
+is text before the first form, kept byte for byte, not read as Lisp."
+  (if (and (>= (length string) 2) (string= "#!" string :end2 2))
+      (let ((nl (position #\Newline string)))
+        (if nl (1+ nl) (length string)))
+      0))
+
 (defun read-source (string &key path (features (or *source-features* *features*)))
   "Read STRING into a PARSED-SOURCE. Never evaluates and never interns.
 A form that runs into end of input is re-read up to the next column-0 #\\( so
@@ -224,7 +232,7 @@ the damage stays inside that form; the result records an IMBALANCE."
          (nodes '())
          (diags '())
          (imbalances '())
-         (start 0))
+         (start (script-header-end s)))
     (loop
       (multiple-value-bind (seg-nodes seg-diags broken) (read-segment client text start n)
         (setf nodes (append nodes seg-nodes)
