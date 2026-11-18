@@ -66,6 +66,15 @@ the number of elements before &BODY is the distinguished-argument count."
 
 (reset-indentation)
 
+(defparameter *method-option-operators* '("DEFGENERIC")
+  "Operators whose (:method …) options indent like a DEFMETHOD body.")
+
+(defun bare-operator-name (name)
+  "NAME upcased, without a package prefix."
+  (let* ((name (string-upcase name))
+         (colon (position #\: name :from-end t)))
+    (if colon (subseq name (1+ colon)) name)))
+
 (defun operator-indentation (name)
   "Spec for operator NAME (any case, optional package prefix), or NIL for a
 function call. Unknown DEF* / DEFINE-* operators take 2 distinguished
@@ -208,7 +217,17 @@ frame it belongs to and whether it counts (not absorbed by a prefix)."
                                ((or (zerop (length text)) (digit-char-p (char text 0))
                                     (char= (char text 0) #\#))
                                 :other)
-                               (t :symbol))))))
+                               (t :symbol)))
+                   ;; (:method lambda-list . body) inside DEFGENERIC indents like
+                   ;; DEFMETHOD's tail: one distinguished argument, then the body
+                   (let ((parent (second stack)))
+                     (when (and (eq (frame-head-kind frame) :keyword)
+                                (string-equal text ":method")
+                                parent (eq (frame-head-kind parent) :symbol)
+                                (member (bare-operator-name (frame-head parent)) *method-option-operators*
+                                        :test #'string=))
+                       (setf (frame-kind frame) :code
+                             (frame-forced-spec frame) 1))))))
         (loop while (< i n)
               do (cond
                    ;; continuing a string
