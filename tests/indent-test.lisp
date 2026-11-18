@@ -12,7 +12,12 @@
      ((lines "(make-instance 'foo :a 1" ":b 2)") (lines "(make-instance 'foo :a 1" "                    :b 2)"))
      ;; data
      ((lines "'(1 2" "3)") (lines "'(1 2" "  3)"))
-     ((lines "(:export #:a" "#:b)") (lines "(:export #:a" " #:b)"))
+     ((lines "(:a 1" ":b 2)") (lines "(:a 1" " :b 2)"))
+     ;; keyword head in code: like a call, a keyword line like a plist
+     ((lines "(:export #:a" "#:b)") (lines "(:export #:a" "         #:b)"))
+     ((lines "(defpackage #:p" "(:use #:cl)" "(:export #:a" "#:b))")
+      (lines "(defpackage #:p" "  (:use #:cl)" "  (:export #:a" "           #:b))"))
+     ((lines "(:report (lambda (c s)" "(f c s)))") (lines "(:report (lambda (c s)" "           (f c s)))"))
      ((lines "((a b)" "(c d))") (lines "((a b)" " (c d))"))
      ;; local definitions and clauses
      ((lines "(flet ((f (x)" "(1+ x)))" "(f 1))") (lines "(flet ((f (x)" "         (1+ x)))" "  (f 1))"))
@@ -34,7 +39,11 @@
      ((lines "(cl:defgeneric f (x)" "(:method ((x t)) (declare (ignore x))" "nil))")
       (lines "(cl:defgeneric f (x)" "  (:method ((x t)) (declare (ignore x))" "    nil))"))
      ;; elsewhere a (:method …) list is data
-     ((lines "(list (:method a" "b))") (lines "(list (:method a" "       b))"))
+     ((lines "(list (:method a" "b))") (lines "(list (:method a" "               b))"))
+     ;; CFFI definers: the name is the one distinguished argument
+     ((lines "(defcstruct foo" ";; doc" "(a :pointer)" "(b :int))")
+      (lines "(defcstruct foo" "  ;; doc" "  (a :pointer)" "  (b :int))"))
+     ((lines "(defcfun (\"f\" %f) :int" "(x :int))") (lines "(defcfun (\"f\" %f) :int" "  (x :int))"))
      ;; LOOP keeps its clause layout
      ((lines "(loop for x in y" "      when x" "        collect x)") (lines "(loop for x in y" "      when x" "        collect x)")))
   (ok (equal (indent-code input) expected)))

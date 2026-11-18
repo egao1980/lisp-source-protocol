@@ -7,8 +7,10 @@
 ;;;     those by 4 and the body by 2 when they start a line;
 ;;;   - a function call aligns its arguments with the first argument when that
 ;;;     argument is on the operator's line, else one column past the paren;
-;;;   - data (quoted lists, vectors, a list whose head is not a symbol, or a
-;;;     keyword head) aligns with the first element.
+;;;   - data (quoted lists, vectors, a list whose head is not a symbol) aligns
+;;;     with the first element;
+;;;   - a keyword head in code, (:export #:a #:b), aligns a line with the first
+;;;     argument, or with the head when the line starts with a keyword (plist).
 ;;; Lines that start inside a string or block comment are left untouched.
 
 (defvar *indentation* (make-hash-table :test #'equal)
@@ -55,7 +57,11 @@ the number of elements before &BODY is the distinguished-argument count."
     ("DEFSYSTEM" . 1) ("DEFINE-CONDITION" . 2) ("DEFCLASS" . 2) ("DEFGENERIC" . 2)
     ("DEFMETHOD" . 2) ("DEFUN" . 2) ("DEFMACRO" . 2) ("DEFTYPE" . 2)
     ("DEFINE-COMPILER-MACRO" . 2) ("DEFSETF" . 2) ("DEFINE-SETF-EXPANDER" . 2)
-    ("DEFINE-MODIFY-MACRO" . 2) ("DEFINE-METHOD-COMBINATION" . 2)))
+    ("DEFINE-MODIFY-MACRO" . 2) ("DEFINE-METHOD-COMBINATION" . 2)
+    ;; CFFI: one distinguished argument (the name) unless noted
+    ("DEFCSTRUCT" . 1) ("DEFCUNION" . 1) ("DEFCENUM" . 1) ("DEFBITFIELD" . 1)
+    ("DEFCTYPE" . 1) ("DEFCVAR" . 1) ("DEFINE-FOREIGN-LIBRARY" . 1)
+    ("DEFCFUN" . 2) ("DEFCALLBACK" . 3)))
 
 (defun reset-indentation ()
   "Restore *INDENTATION* to the standard table."
@@ -125,6 +131,17 @@ the line starts with a keyword."
         (let ((n (frame-element-count frame))
               (open (frame-open-col frame)))
           (cond ((zerop n) (1+ open))
+                ;; Keyword head in code, (:export #:a #:b): a line that starts
+                ;; with a keyword aligns with the head (plist style), any other
+                ;; line with the first argument when it is on the head's line.
+                ((and (eq (frame-head-kind frame) :keyword)
+                      (eq (frame-kind frame) :code)
+                      (not (frame-forced-spec frame))
+                      (not keyword-line))
+                 (let ((first-arg (frame-element frame 1)))
+                   (if (and first-arg (= (second first-arg) (frame-open-line frame)))
+                       (car first-arg)
+                       (car (frame-element frame 0)))))
                 ((or (member (frame-kind frame) '(:data :local-definitions))
                      (and (not (eq (frame-head-kind frame) :symbol))
                           (not (frame-forced-spec frame))))
