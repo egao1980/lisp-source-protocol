@@ -26,6 +26,15 @@
      ((lines "(defun x ()" "\"doc" "   kept\"" "(f #\\( 1" "2))")
       (lines "(defun x ()" "  \"doc" "   kept\"" "  (f #\\( 1" "     2))"))
      ((lines "(progn" "#| a" "     b |#" "(f))") (lines "(progn" "  #| a" "     b |#" "  (f))"))
+     ;; (:method …) options of defgeneric indent like defmethod
+     ((lines "(defgeneric area (shape)" "(:documentation \"x\")" "(:method ((s square))" "(* (side s) (side s))))")
+      (lines "(defgeneric area (shape)" "  (:documentation \"x\")" "  (:method ((s square))" "    (* (side s) (side s))))"))
+     ((lines "(defgeneric area (shape)" "(:method" "((s square))" "(side s)))")
+      (lines "(defgeneric area (shape)" "  (:method" "      ((s square))" "    (side s)))"))
+     ((lines "(cl:defgeneric f (x)" "(:method ((x t)) (declare (ignore x))" "nil))")
+      (lines "(cl:defgeneric f (x)" "  (:method ((x t)) (declare (ignore x))" "    nil))"))
+     ;; elsewhere a (:method …) list is data
+     ((lines "(list (:method a" "b))") (lines "(list (:method a" "       b))"))
      ;; LOOP keeps its clause layout
      ((lines "(loop for x in y" "      when x" "        collect x)") (lines "(loop for x in y" "      when x" "        collect x)")))
   (ok (equal (indent-code input) expected)))
