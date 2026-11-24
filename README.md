@@ -48,7 +48,7 @@ Operations never write text: each returns an `edit-plan` (non-overlapping replac
 
 | Ops | |
 |-----|--|
-| `replace-node` `insert-before` `insert-after` `delete-node` | input text must read clean (`edit-input-unreadable`); every `#+`/`#-` form in it is written and counted, whatever the features; inserted code is re-indented at the node's column (see below) |
+| `replace-node` `insert-before` `insert-after` `delete-node` | input text must read clean (`edit-input-unreadable`); every `#+`/`#-` form in it is written and counted, whatever the features; its comments (`;`, `#|…|#`, trailing) are written where they were; inserted code is re-indented in place (see below) |
 | `wrap-node` `splice-node` `raise-node` `transpose-nodes` | `wrap-node` re-indents the wrapped form |
 | `move-node` | to before/after a target form, in the same file (one plan) or another (two plans: verify both, then commit) |
 | `slurp-forward` / `-backward`, `barf-forward` / `-backward` | proper `(…)` lists only |
@@ -56,18 +56,23 @@ Operations never write text: each returns an `edit-plan` (non-overlapping replac
 | `add-export` | appends in the existing designator style, or adds an `(:export …)` option |
 | `repair-parens` | applies an `imbalance` fix; accepted only if problems decrease |
 
+Layout of inserted code: after a top-level form it goes after a blank line; before one, it goes above the `;` comment lines that belong to that form, then a blank line. Forms the code puts on one line are split onto their own lines there (and in a list laid out one per line); otherwise the code keeps its own line breaks. Inside a list it goes on its own line, at the column of the siblings on their own lines, when the neighbouring sibling is on another line, or the anchor is last (first) and starts its line, or the code spans lines; else on the anchor's line. A comment that ends the anchor's line stays there; one after the last inserted form follows the closing parens; code that would end up after a comment moves to the next line. `move-node` and `slurp-forward` / `-backward` place a form that lands first or last the same way.
+
 Insert, delete, transpose and move on the form of a `#+`/`#-` branch act on the whole conditional, prefix included. Refused with `edit-not-applicable`: other sibling edits under `#+`/`#-` (the feature expression, slurp / barf), quote or backquote prefixes, the consing dot, dotted lists. Nodes built by recovery signal `edit-on-recovered-node` (`continue` to force).
 
 ## Indentation
 
-Code an edit inserts goes through `indent-code` (`*reindent*` nil only shifts continuation lines). The rules follow the Emacs/SLIME style:
+Code an edit inserts goes through `indent-code` (`*reindent*` nil only shifts continuation lines). It starts from the lists open where the code goes (`indent-state`), so a replaced `labels` binding or `handler-case` clause indents as one, and new elements of that list line up with the siblings already on their own lines. The rules follow the Emacs/SLIME style (SLIME's `slime-cl-indent`):
 
-- an operator with *N* distinguished arguments indents them by 4 and its body by 2: `defun` 2, `let` 1, `handler-case` (clauses get their own body indent), `flet`/`labels` (local definitions), unknown `def*` 2, `with-*` / `do-*` 1;
+- an operator with *N* distinguished arguments indents them by 4 and its body by 2: `defun` 2, `handler-case` (clauses get their own body indent), `flet`/`labels`/`macrolet` (local definitions get `defun` bodies), `let`/`let*`/`handler-bind`/`restart-bind`/`symbol-macrolet` (bindings: a value on its own line goes 2 in), unknown `def*` 2, `with-*` / `do-*` 1;
+- `cond` clauses go 2 in from the paren, or line up with the first clause when it is on the `cond` line (`(:rest 2)`);
 - a call aligns its arguments with the first argument on the operator's line (or with a keyword/value run there), else one past the paren;
 - data (quoted lists, vectors, keyword or non-symbol heads) aligns with the first element; `loop` keeps the input's clause layout;
-- lines starting inside a string or `#|…|#` are untouched.
+- lines starting inside a string or `#|…|#` are untouched; moving a form never shifts them either.
 
-`set-indentation` takes an integer or a Swank-style spec (`(4 4 &body)`); `learn-indentation` reads the `&body` position of every `defmacro` in a set of sources; `reset-indentation` restores the table. On this repo's and the cl-stack protocol sources, 85 % of top-level forms re-indent to exactly their current text; the rest are mostly calls to project macros.
+`set-indentation` takes an integer, `:local-definitions`, `:bindings`, `(:clauses N)`, `(:rest N)` or a Swank-style spec (`(4 4 &body)`); `learn-indentation` reads the `&body` position of every `defmacro` in a set of sources; `reset-indentation` restores the table.
+
+Against Emacs 29 with `slime-cl-indent` on 157 files (alexandria, bordeaux-threads, usocket, http-backend-async, this repo's `src/`), 83 % of top-level forms re-indent exactly as SLIME does, and 12 % of lines differ (0.2.5: 81 % and 18 %). Most of the rest: lambda lists with `&key` / `&optional` parameters on several lines (SLIME lines them up after the keyword), RT-style `deftest` (SLIME's generic `def*` rule; Rove's `deftest` is 1, as Swank reports it), `unwind-protect` (SLIME puts the protected form 5 in), arguments after a `,`, and `loop` clauses.
 
 ## Test
 

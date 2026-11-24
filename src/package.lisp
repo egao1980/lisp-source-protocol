@@ -134,6 +134,8 @@
    #:reset-indentation
    #:operator-indentation
    #:indent-code
+   #:indent-state
+   #:next-line-column
    #:learn-indentation
    #:*reindent*
    ;; edit

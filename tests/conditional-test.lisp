@@ -139,7 +139,7 @@ missing ) does not take the conditional's prefix away from its branch."
       (lines "(a)" "" "#+sbcl (list :plus)" "" "#-sbcl (list :minus)" "" "(b)"))
      ("(defun f ())" '(0) #'insert-after (list *save-hook-branches*)
       (lines "(defun f ())" ""
-             "#+sbcl (pushnew '%reset-boundary-random-state sb-ext:*save-hooks*)" ""
+             "#+sbcl (pushnew '%reset-boundary-random-state sb-ext:*save-hooks*)"
              "#-sbcl (uiop:register-image-dump-hook '%reset-boundary-random-state)"))
      ("(a)" '(0) #'insert-after '("#+(or) (old) #-(and) (older)")
       (lines "(a)" "" "#+(or) (old)" "" "#-(and) (older)"))

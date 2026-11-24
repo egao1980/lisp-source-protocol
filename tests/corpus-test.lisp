@@ -134,3 +134,56 @@
                     (edit-error () (incf refused))))))))))
     (ok (plusp ok) (format nil "~D verified, ~D refused" ok refused))
     (ok (null unclean) (format nil "no unclean results~@[: ~{~A~^, ~}~]" (subseq unclean 0 (min 3 (length unclean)))))))
+
+;;; Random inserts and replaces whose code carries comments: a verified
+;;; result keeps every comment, the file's and the code's.
+
+(defparameter *commented-operations*
+  (list (list (lambda (ps n) (insert-after ps n (format nil "(inserted 2) ; note a~%;; note b")))
+              "; note a" ";; note b")
+        (list (lambda (ps n) (insert-before ps n (format nil ";; note c~%(inserted 3) ; note d")))
+              ";; note c" "; note d")
+        (list (lambda (ps n) (replace-node ps n (format nil ";; note e~%(replaced 2) ; note f")))
+              ";; note e" "; note f")
+        (list (lambda (ps n) (insert-after ps n "#| note g |# (inserted 4)"))
+              "#| note g |#"))
+  "Edits whose code carries comments, each with the comment texts it writes.")
+
+(defun comment-texts (nodes)
+  "Text of every comment under NODES, without a ; comment's newline."
+  (let ((texts '()))
+    (walk-nodes (lambda (n)
+                  (when (member (node-kind n) '(:comment :block-comment))
+                    (push (string-right-trim '(#\Newline #\Return) (node-text n)) texts)))
+                nodes)
+    texts))
+
+(deftest random-commented-edits-keep-comments
+  "lisp-source-protocol#11: random edits with comments in their code. A
+verified result is clean and holds every comment the file had (but those of
+a replaced form) and every comment of the code."
+  (let ((seed 2811) (ok 0) (refused 0) (lost '()) (unclean '()))
+    (flet ((next (n) (mod (setf seed (mod (+ (* seed 1103515245) 12345) 2147483648)) n)))
+      (dolist (f (corpus-files))
+        (let ((ps (read-source-file f))
+              (nodes '()))
+          (when (parsed-source-clean-p ps)
+            (walk-nodes (lambda (n) (when (and (expression-node-p n) (node-parent n)) (push n nodes)))
+                        (parsed-source-nodes ps))
+            (let ((nodes (coerce nodes 'vector)))
+              (dotimes (k (min 20 (length nodes)))
+                (destructuring-bind (op &rest written) (nth (next (length *commented-operations*)) *commented-operations*)
+                  (let* ((node (aref nodes (next (length nodes))))
+                         (replaced (and (member ";; note e" written :test #'string=) (comment-texts (list node))))
+                         (kept (set-difference (comment-texts (parsed-source-nodes ps)) replaced :test #'string=)))
+                    (handler-case
+                        (let* ((new (verify-plan (funcall op ps node)))
+                               (text (source-string (parsed-source-text new))))
+                          (cond ((not (parsed-source-clean-p new)) (push (namestring f) unclean))
+                                ((notevery (lambda (c) (search c text)) (append written kept))
+                                 (push (namestring f) lost))
+                                (t (incf ok))))
+                      (edit-error () (incf refused)))))))))))
+    (ok (plusp ok) (format nil "~D verified, ~D refused" ok refused))
+    (ok (null unclean) (format nil "no unclean results~@[: ~{~A~^, ~}~]" (subseq unclean 0 (min 3 (length unclean)))))
+    (ok (null lost) (format nil "no comment lost~@[: ~{~A~^, ~}~]" (subseq lost 0 (min 3 (length lost)))))))

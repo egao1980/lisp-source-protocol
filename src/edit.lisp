@@ -140,9 +140,9 @@ plan, fails to remove one) or changes the top-level form count unexpectedly."
 
 ;;; Reading edit input
 
-(defun read-edit-input (text &key (min 1) max)
-  "Read TEXT as edit input. Return its top-level expression nodes, or signal
-EDIT-INPUT-UNREADABLE. MIN / MAX bound the number of forms."
+(defun read-edit-source (text &key (min 1) max)
+  "Read TEXT as edit input and return its PARSED-SOURCE, comments included, or
+signal EDIT-INPUT-UNREADABLE. MIN / MAX bound the number of forms."
   (let ((ps (read-source text)))
     (unless (parsed-source-clean-p ps)
       (error 'edit-input-unreadable :text text :diagnostics (parsed-source-diagnostics ps)
@@ -156,7 +156,12 @@ EDIT-INPUT-UNREADABLE. MIN / MAX bound the number of forms."
                                                  :message (format nil "expected ~D~@[..~D~] form~:P, got ~D"
                                                                   min max n)
                                                  :start 0 :end (length text))))))
-    (parsed-source-forms ps)))
+    ps))
+
+(defun read-edit-input (text &key (min 1) max)
+  "Read TEXT as edit input. Return its top-level expression nodes, or signal
+EDIT-INPUT-UNREADABLE. MIN / MAX bound the number of forms."
+  (parsed-source-forms (read-edit-source text :min min :max max)))
 
 ;;; Text helpers
 
@@ -180,21 +185,26 @@ EDIT-INPUT-UNREADABLE. MIN / MAX bound the number of forms."
   "When true, code an edit inserts is re-indented with INDENT-CODE; when NIL,
 its continuation lines are only shifted to the target column.")
 
-(defun place-code (text column &key (input-column 0))
-  "TEXT laid out to start at COLUMN."
-  (if *reindent*
-      (indent-code text :column column :input-column input-column)
-      (indent-continuation (dedent-continuation text input-column) column)))
+(defun lay-out-code (text node offset &key (input-column 0) (shift 0) sibling-column)
+  "TEXT as it goes at OFFSET, next to NODE: re-indented with the lists open
+there as context (INDENT-CODE), so it indents as part of the code around it,
+and lines that start an element of the innermost of those lists at
+SIBLING-COLUMN when given. INPUT-COLUMN is where TEXT's first line started in
+the edit input. With *REINDENT* NIL, the lines after the first only move
+SHIFT columns. Second value: the indenter state after TEXT."
+  (multiple-value-bind (context line) (context-at node offset)
+    (let ((column (offset-column node offset)))
+      (if *reindent*
+          (indent-code text :column column :input-column input-column :context context
+                            :first-line line :sibling-column sibling-column)
+          (let ((moved (shift-continuation text shift)))
+            (values moved
+                    (indent-state moved 0 column (length moved) :state context :first-line line)))))))
 
 (defun indent-continuation (text column)
-  "Shift every line of TEXT after the first right by COLUMN spaces."
-  (if (zerop column)
-      text
-      (with-output-to-string (out)
-        (let ((pad (make-string column :initial-element #\Space)))
-          (loop for c across text
-                do (write-char c out)
-                   (when (char= c #\Newline) (write-string pad out)))))))
+  "Shift every line of TEXT after the first right by COLUMN spaces (not the
+lines inside strings and block comments)."
+  (shift-continuation text column))
 
 (defun ws-char-p (c) (member c '(#\Space #\Tab #\Newline #\Return #\Page)))
 
@@ -296,18 +306,198 @@ dotted lists have no free positions to edit."
   (make-instance 'edit-plan :parsed parsed :operation operation :edits edits
                             :form-delta form-delta :repair repair))
 
+(defun blank-char-p (c) (member c '(#\Space #\Tab)))
+
+(defun skip-blanks (s pos)
+  "Offset of the first character at or after POS that is not a space or tab."
+  (or (position-if-not #'blank-char-p s :start pos) (length s)))
+
+(defun line-end (s pos)
+  "Offset of the newline that ends the line holding POS, or the length of S."
+  (or (position #\Newline s :start pos) (length s)))
+
+(defun line-break-between-p (s a b)
+  "True when a newline lies between offsets A and B of S."
+  (and (< a b) (find #\Newline s :start a :end b) t))
+
+(defun offset-column (node offset)
+  "Column of OFFSET in NODE's source."
+  (nth-value 1 (offset-line-column (node-source node) offset)))
+
+(defun spaces (n) (make-string n :initial-element #\Space))
+
+(defun top-level-ancestor (node)
+  "The top-level form NODE is part of: NODE itself when it is one."
+  (loop until (or (null (node-parent node)) (top-level-node-p node))
+        do (setf node (node-parent node)))
+  node)
+
+(defun context-at (node offset)
+  "The indenter state at OFFSET, inside NODE's top-level form or after it, and
+the line of OFFSET counted from that form's first line (INDENT-STATE)."
+  (let ((top (top-level-ancestor node)))
+    (if (<= offset (node-start top))
+        (values (list '() nil 0) 0)
+        (indent-state (node-string node) (node-start top) (node-column top) offset))))
+
+(defun line-tail (s pos)
+  "What follows POS on its line: :BLANK; :COMMENT, a ; comment after blanks;
+:CLOSERS, closing parens and then nothing or a ; comment; or :CODE. Second
+value: the end of the closing parens; third: the start of the comment."
+  (let ((p (skip-blanks s pos)))
+    (flet ((line-done-p (i) (or (= i (length s)) (member (char s i) '(#\Newline #\Return)))))
+      (cond ((line-done-p p) :blank)
+            ((char= (char s p) #\;) (values :comment nil p))
+            ((char= (char s p) #\))
+             (let* ((q (or (position-if-not (lambda (c) (or (char= c #\)) (blank-char-p c))) s :start p)
+                           (length s)))
+                    (closers-end (1+ (position #\) s :end q :from-end t))))
+               (cond ((line-done-p q) (values :closers closers-end nil))
+                     ((char= (char s q) #\;) (values :closers closers-end q))
+                     (t (values :code closers-end nil)))))
+            (t :code)))))
+
+(defun comment-end (node)
+  "NODE's end, before the newline a ; comment ends with."
+  (let ((end (node-end node)))
+    (if (and (eq (node-kind node) :comment) (> end (node-start node))
+             (char= (char (node-string node) (1- end)) #\Newline))
+        (1- end)
+        end)))
+
+(defun comments-above (node)
+  "Start of the ; comment lines directly above NODE in its list (no blank line
+in between), or NODE-START. NODE starts its line."
+  (let* ((s (node-string node))
+         (siblings (node-children (node-parent node)))
+         (start (node-start node)))
+    (loop for c in (reverse (subseq siblings 0 (position node siblings)))
+          while (and (eq (node-kind c) :comment) (line-prefix-blank-p c)
+                     (= (node-end c) (line-start s start)))
+          do (setf start (node-start c)))
+    start))
+
+(defstruct (input-layout (:conc-name input-))
+  (text "" :type string)
+  (comment nil)
+  (gap "")
+  (column 0)
+  (ends-in-comment nil))
+
+(defun trailing-input-comment (input)
+  "The ; comment after the last form of edit input INPUT, on that form's line."
+  (let* ((nodes (parsed-source-nodes input))
+         (last (car (last nodes)))
+         (before (car (last nodes 2))))
+    (and (eq (node-kind last) :comment) (not (eq before last))
+         (not (line-break-between-p (node-string last) (node-end before) (node-start last)))
+         last)))
+
+(defun input-multi-line-p (input)
+  "True when edit input INPUT, comments included, spans more than one line."
+  (let ((nodes (parsed-source-nodes input)))
+    (line-break-between-p (node-string (first nodes)) (node-start (first nodes))
+                          (comment-end (car (last nodes))))))
+
+(defun lay-out-input (input &optional split)
+  "Edit input INPUT (a PARSED-SOURCE) as written, comments included: its text
+from the first form or comment to the last. SPLIT, a string, replaces the
+blanks between two forms that share a line. A ; comment after the last form
+is kept apart (COMMENT, after the blanks GAP), so it can follow closing
+parens."
+  (let* ((nodes (parsed-source-nodes input))
+         (s (node-string (first nodes)))
+         (comment (trailing-input-comment input))
+         (body (if comment (butlast nodes) nodes))
+         (start (node-start (first nodes)))
+         (end (comment-end (car (last body))))
+         (pos start))
+    (make-input-layout
+     :text (with-output-to-string (out)
+             (when split
+               (loop for (a b) on body
+                     when (and b (expression-node-p a) (expression-node-p b)
+                               (not (line-break-between-p s (node-end a) (node-start b))))
+                       do (write-string s out :start pos :end (node-end a))
+                          (write-string split out)
+                          (setf pos (node-start b))))
+             (write-string s out :start pos :end end))
+     :comment (and comment (subseq s (node-start comment) (comment-end comment)))
+     :gap (if comment (subseq s (node-end (car (last body))) (node-start comment)) "")
+     :column (offset-column (first nodes) start)
+     :ends-in-comment (eq (node-kind (car (last body))) :comment))))
+
+(defun input-tail (layout)
+  "LAYOUT's trailing comment with the blanks before it, or \"\"."
+  (if (input-comment layout)
+      (concatenate 'string (input-gap layout) (input-comment layout))
+      ""))
+
 ;;; Operations. Each takes the PARSED-SOURCE the node belongs to.
 
 (defun replace-node (parsed node new-text)
-  "Replace NODE with exactly one form read from NEW-TEXT."
+  "Replace NODE with exactly one form read from NEW-TEXT, with the comments
+written around it. A comment before the form starts its own line; one after
+it goes after the closing parens that follow NODE, or, when code follows on
+the line, that code moves to the next line."
   (ensure-editable node :replace)
   (when (consing-dot-node-p node)
     (error 'edit-not-applicable :operation :replace :node node :reason "the consing dot"))
-  (read-edit-input new-text :min 1 :max 1)
-  (plan parsed :replace
-        (list (make-text-edit (node-start node) (node-end node)
-                              (place-code (string-trim '(#\Space #\Tab #\Newline) new-text)
-                                          (node-column node))))))
+  (let* ((input (read-edit-source new-text :min 1 :max 1))
+         (layout (lay-out-input input))
+         (s (node-string node))
+         (start (node-start node))
+         (end (node-end node))
+         (leading (not (expression-node-p (first (parsed-source-nodes input)))))
+         (break-before (and leading (not (line-prefix-blank-p node))))
+         (from (if break-before (skip-ws-backward s start) start))
+         (sibling (and (line-prefix-blank-p node) (not (top-level-node-p node)) (node-column node))))
+    (multiple-value-bind (text state)
+        (lay-out-code (concatenate 'string (if break-before (format nil "~%~A" (spaces (input-column layout))) "")
+                                   (input-text layout))
+                      node from :input-column (input-column layout) :sibling-column sibling
+                      :shift (- (node-column node) (input-column layout)))
+      (multiple-value-bind (tail closers-end) (line-tail s end)
+        (flet ((new-line (keyword)
+                 (format nil "~%~A" (spaces (if (top-level-node-p node)
+                                                0
+                                                (next-line-column state 0 :keyword-line keyword))))))
+          (plan parsed :replace
+                (list
+                 (case tail
+                   (:closers
+                    (let ((closers (remove-if #'blank-char-p (subseq s end closers-end))))
+                      (if (or (input-comment layout) (input-ends-in-comment layout))
+                          (make-text-edit from closers-end
+                                          (concatenate 'string text
+                                                       (if (input-ends-in-comment layout) (new-line nil) "")
+                                                       closers (input-tail layout)))
+                          (make-text-edit from end text))))
+                   (:code
+                    (let* ((after (skip-blanks s end))
+                           (follow (find after (sibling-forms node) :key #'node-start)))
+                      (cond ((or (input-comment layout) (input-ends-in-comment layout))
+                             ;; what followed on the line starts the next one
+                             (let ((line (new-line (char= (char s after) #\:))))
+                               (make-text-edit from (if follow (node-end follow) after)
+                                               (concatenate 'string text (input-tail layout) line
+                                                            (if follow
+                                                                (shift-continuation (node-text follow)
+                                                                                    (- (length line) 1 (node-column follow)))
+                                                                "")))))
+                            (follow
+                             ;; the next sibling on the line moves with the end of the new text
+                             (let* ((last-nl (position #\Newline text :from-end t))
+                                    (column (+ (if last-nl
+                                                   (- (length text) last-nl 1)
+                                                   (+ (offset-column node from) (length text)))
+                                               (- after end))))
+                               (make-text-edit from (node-end follow)
+                                               (concatenate 'string text (subseq s end after)
+                                                            (shift-continuation (node-text follow)
+                                                                                (- column (node-column follow)))))))
+                            (t (make-text-edit from end text)))))
+                   (t (make-text-edit from end (concatenate 'string text (input-tail layout))))))))))))
 
 (defun separator-for (node)
   "Whitespace placed between NODE and an inserted sibling."
@@ -317,38 +507,144 @@ dotted lists have no free positions to edit."
         (t " ")))
 
 (defun insert-after (parsed node text)
-  "Insert the forms read from TEXT after NODE, as siblings. Every form is
-written, #+/#- ones included whatever the reading features."
+  "Insert the forms read from TEXT after NODE, as siblings, with the comments
+written around them. Every form is written, #+/#- ones included whatever the
+reading features. A comment that ends NODE's line stays on it."
   (let ((node (conditional-unit node)))
     (ensure-editable node :insert-after)
     (ensure-sibling-context node :insert-after)
-    (let ((forms (read-edit-input text)))
-      (plan parsed :insert-after
-            (list (make-text-edit (node-end node) (node-end node)
-                                  (concatenate 'string (separator-for node)
-                                               (join-forms-text node forms))))
-            :form-delta (if (top-level-node-p node) (length forms) 0)))))
+    (let ((input (read-edit-source text)))
+      (plan parsed :insert-after (list (insert-after-edit node input))
+                   :form-delta (if (top-level-node-p node) (length (parsed-source-forms input)) 0)))))
 
 (defun insert-before (parsed node text)
-  "Insert the forms read from TEXT before NODE, as siblings. Every form is
-written, #+/#- ones included whatever the reading features."
+  "Insert the forms read from TEXT before NODE, as siblings, with the comments
+written around them. Every form is written, #+/#- ones included whatever the
+reading features. The ; comment lines right above NODE stay with it."
   (let ((node (conditional-unit node)))
     (ensure-editable node :insert-before)
     (ensure-sibling-context node :insert-before)
-    (let ((forms (read-edit-input text)))
-      (plan parsed :insert-before
-            (list (make-text-edit (node-start node) (node-start node)
-                                  (concatenate 'string (join-forms-text node forms)
-                                               (separator-for node))))
-            :form-delta (if (top-level-node-p node) (length forms) 0)))))
+    (let ((input (read-edit-source text)))
+      (plan parsed :insert-before (list (insert-before-edit node input))
+                   :form-delta (if (top-level-node-p node) (length (parsed-source-forms input)) 0)))))
 
-(defun join-forms-text (node forms)
-  (let ((sep (separator-for node))
-        (column (if (top-level-node-p node) 0 (node-column node))))
-    (with-output-to-string (out)
-      (loop for (f . more) on forms
-            do (write-string (place-code (node-text f) column :input-column (node-column f)) out)
-               (when more (write-string sep out))))))
+(defun insert-after-edit (node input)
+  "Text edit putting edit input INPUT (a PARSED-SOURCE) after NODE. The new
+code goes on a line of its own when NODE's next sibling is on a later line,
+or when NODE is the last element and starts its line or the code spans
+lines; after a top-level form, after a blank line. Otherwise it goes on
+NODE's line. A comment that ends NODE's line stays there, and one after the
+last new form goes after the closing parens that follow it."
+  (let* ((s (node-string node))
+         (top (top-level-node-p node))
+         (end (node-end node))
+         (next (unless top (next-sibling node)))
+         (multi (input-multi-line-p input))
+         (input-comment (trailing-input-comment input)))
+    (multiple-value-bind (tail closers-end line-comment) (line-tail s end)
+      (let* ((own (or top (eq tail :comment)
+                      (if next
+                          (line-break-between-p s end (node-start next))
+                          (or (line-prefix-blank-p node) multi (and line-comment input-comment t)))))
+             (lead (cond (top (format nil "~%~%")) (own (string #\Newline)) (t " ")))
+             (layout (lay-out-input input (and own lead)))
+             (body (concatenate 'string lead (if own (spaces (input-column layout)) "") (input-text layout)))
+             (sibling (cond (top nil)
+                            ((and next (line-prefix-blank-p next)) (node-column next))
+                            ((line-prefix-blank-p node) (node-column node))))
+             (ends-in-comment (or (input-comment layout) (input-ends-in-comment layout))))
+        (flet ((lay-out (text at)
+                 (lay-out-code text node at
+                               :input-column (input-column layout) :sibling-column sibling
+                               :shift (- (if own (or sibling (node-column node)) (1+ (offset-column node at)))
+                                         (input-column layout)))))
+          (ecase tail
+            ((:blank :comment)
+             (let ((at (if (eq tail :comment) (line-end s end) end)))
+               (make-text-edit at at (concatenate 'string (lay-out body at) (input-tail layout)))))
+            (:closers
+             (let ((closers (remove-if #'blank-char-p (subseq s end closers-end))))
+               (if own
+                   ;; the closers move after the new code; NODE's comment stays
+                   (let ((moved (if line-comment (subseq s closers-end (line-end s end)) "")))
+                     (multiple-value-bind (text state) (lay-out (concatenate 'string moved body) end)
+                       (make-text-edit end (if line-comment (line-end s end) closers-end)
+                                       (concatenate 'string text
+                                                    (if (input-ends-in-comment layout)
+                                                        (format nil "~%~A" (spaces (next-line-column state 0)))
+                                                        "")
+                                                    closers (input-tail layout)))))
+                   (let ((text (lay-out body end)))
+                     (if (input-comment layout)
+                         (make-text-edit end closers-end (concatenate 'string text closers (input-tail layout)))
+                         (make-text-edit end end text))))))
+            (:code
+             (let* ((after (skip-blanks s end))
+                    (follow (and next (= (node-start next) after) next))
+                    (break (or top (if follow (or multi ends-in-comment) ends-in-comment))))
+               (multiple-value-bind (text state) (lay-out body end)
+                 (cond (break
+                        ;; what followed on the line starts the next one
+                        (let ((column (if top 0 (next-line-column state 0 :keyword-line (char= (char s after) #\:)))))
+                          (make-text-edit end (if follow (node-end follow) after)
+                                          (concatenate 'string text (input-tail layout)
+                                                       (if top (format nil "~%~%") (format nil "~%~A" (spaces column)))
+                                                       (if follow
+                                                           (shift-continuation (node-text follow) (- column (node-column follow)))
+                                                           "")))))
+                       (follow
+                        ;; the next sibling moves right on its line
+                        (make-text-edit end (node-end follow)
+                                        (concatenate 'string text (subseq s end after)
+                                                     (shift-continuation (node-text follow) (length text)))))
+                       (t (make-text-edit end end text))))))))))))
+
+(defun insert-before-edit (node input)
+  "Text edit putting edit input INPUT (a PARSED-SOURCE) before NODE. Before a
+form that starts its line, the new code goes on lines of its own above it and
+above the ; comment lines over it (a top-level form: then a blank line).
+Otherwise it takes NODE's place, and NODE moves to the next line when its
+next sibling is on a later line or the new code spans lines or ends with a
+comment; else NODE stays on the line, after it."
+  (let* ((s (node-string node))
+         (start (node-start node))
+         (next (unless (top-level-node-p node) (next-sibling node))))
+    (cond ((top-level-node-p node)
+           (let ((at (leading-comment-start node))
+                 (layout (lay-out-input input (format nil "~%~%"))))
+             (make-text-edit at at (concatenate 'string
+                                                (lay-out-code (input-text layout) node at
+                                                              :input-column (input-column layout)
+                                                              :shift (- (input-column layout)))
+                                                (input-tail layout) (format nil "~%~%")))))
+          ((line-prefix-blank-p node)
+           (let* ((at (comments-above node))
+                  (column (offset-column node at))
+                  (layout (lay-out-input input (string #\Newline))))
+             (make-text-edit at at (concatenate 'string
+                                                (lay-out-code (input-text layout) node at
+                                                              :input-column (input-column layout)
+                                                              :sibling-column (node-column node)
+                                                              :shift (- column (input-column layout)))
+                                                (input-tail layout)
+                                                (format nil "~%~A" (spaces column))))))
+          (t
+           (let* ((down (or (input-multi-line-p input) (trailing-input-comment input)
+                            (and next (line-break-between-p s (node-end node) (node-start next)))))
+                  (layout (lay-out-input input (and down (string #\Newline))))
+                  (sibling (and next (line-prefix-blank-p next) (node-column next))))
+             (multiple-value-bind (text state)
+                 (lay-out-code (input-text layout) node start
+                               :input-column (input-column layout) :sibling-column sibling
+                               :shift (- (node-column node) (input-column layout)))
+               (let* ((head (concatenate 'string text (input-tail layout)))
+                      (column (if down
+                                  (or sibling (next-line-column state 0 :keyword-line (char= (char s start) #\:)))
+                                  (+ (node-column node) (length head) 1))))
+                 (make-text-edit start (node-end node)
+                                 (concatenate 'string head
+                                              (if down (format nil "~%~A" (spaces column)) " ")
+                                              (shift-continuation (node-text node) (- column (node-column node))))))))))))
 
 (defun delete-node (parsed node)
   "Delete NODE and the whitespace that separated it from its neighbours. The
@@ -399,12 +695,13 @@ HEAD's operator; a one-line NODE stays on HEAD's line."
     (plan parsed :wrap
           (if *reindent*
               (let ((column (node-column node)))
-                (list (make-text-edit (node-start node) (node-end node)
-                                      (indent-code (concatenate 'string open (node-text node) ")")
-                                                   :column column
-                                                   :input-column (if multi-line
-                                                                     column
-                                                                     (- column (length open)))))))
+                (multiple-value-bind (context line) (context-at node (node-start node))
+                  (list (make-text-edit (node-start node) (node-end node)
+                                        (indent-code (concatenate 'string open (node-text node) ")")
+                                                     :column column :context context :first-line line
+                                                     :input-column (if multi-line
+                                                                       column
+                                                                       (- column (length open))))))))
               (list (make-text-edit (node-start node) (node-start node) open)
                     (make-text-edit (node-end node) (node-end node) ")"))))))
 
@@ -433,30 +730,78 @@ HEAD's operator; a one-line NODE stays on HEAD's line."
           (list (make-text-edit (node-start parent) (node-end parent) (node-text node))))))
 
 (defun slurp-forward (parsed node)
-  "Move the closing paren of list NODE past its next sibling."
+  "Move the closing paren of list NODE past its next sibling. A sibling on a
+later line lands on its own line, at the column of NODE's elements."
   (ensure-editable node :slurp-forward)
   (ensure-sibling-context node :slurp-forward)
   (ensure-list-node node :slurp-forward)
   (let ((next (next-sibling node)))
     (unless next
       (error 'edit-not-applicable :operation :slurp-forward :node node :reason "no next sibling"))
-    (plan parsed :slurp-forward
-          (list (make-text-edit (1- (node-end node)) (node-end node) "")
-                (make-text-edit (node-end next) (node-end next) ")"))
-          :form-delta (if (top-level-node-p node) -1 0))))
+    (plan parsed :slurp-forward (slurp-forward-edits node next)
+                 :form-delta (if (top-level-node-p node) -1 0))))
+
+(defun slurp-forward-edits (node next)
+  "Text edits moving the closing paren of NODE past NEXT, its next sibling."
+  (let* ((s (node-string node))
+         (close (1- (node-end node)))
+         (last (car (last (node-forms node))))
+         (inner-end (if last (node-end last) (1+ (node-start node)))))
+    (if (or (find-if-not #'ws-char-p s :start inner-end :end close)
+            (find-if-not #'ws-char-p s :start (node-end node) :end (node-start next)))
+        ;; a comment in the way: move the paren alone
+        (list (make-text-edit close (node-end node) "")
+              (make-text-edit (node-end next) (node-end next) ")"))
+        (let* ((later (and last (line-break-between-p s (node-end node) (node-start next))))
+               (gap (cond (later "") (last (subseq s (node-end node) (node-start next))) (t "")))
+               (column (cond ((not later) (+ (offset-column node inner-end) (length gap)))
+                             ((line-prefix-blank-p last) (node-column last))
+                             (t (next-line-column (context-at node close) 0)))))
+          (list (make-text-edit inner-end (node-end next)
+                                (concatenate 'string (if later (format nil "~%~A" (spaces column)) gap)
+                                             (shift-continuation (node-text next) (- column (node-column next)))
+                                             ")")))))))
 
 (defun slurp-backward (parsed node)
-  "Move the opening paren of list NODE before its previous sibling."
+  "Move the opening paren of list NODE before its previous sibling. When
+NODE's elements were on a later line than that sibling, they keep their own
+lines, aligned under it."
   (ensure-editable node :slurp-backward)
   (ensure-sibling-context node :slurp-backward)
   (ensure-list-node node :slurp-backward)
   (let ((prev (previous-sibling node)))
     (unless prev
       (error 'edit-not-applicable :operation :slurp-backward :node node :reason "no previous sibling"))
-    (plan parsed :slurp-backward
-          (list (make-text-edit (node-start prev) (node-start prev) "(")
-                (make-text-edit (node-start node) (1+ (node-start node)) ""))
-          :form-delta (if (top-level-node-p node) -1 0))))
+    (plan parsed :slurp-backward (slurp-backward-edits node prev)
+                 :form-delta (if (top-level-node-p node) -1 0))))
+
+(defun slurp-backward-edits (node prev)
+  "Text edits moving the opening paren of NODE before PREV, its previous
+sibling."
+  (let* ((s (node-string node))
+         (open (node-start node))
+         (first (first (node-forms node))))
+    (if (or (null first)
+            (find-if-not #'ws-char-p s :start (node-end prev) :end open)
+            (find-if-not #'ws-char-p s :start (1+ open) :end (node-start first)))
+        ;; empty, or a comment in the way: move the paren alone
+        (list (make-text-edit (node-start prev) (node-start prev) "(")
+              (make-text-edit open (1+ open) ""))
+        (let* ((head (concatenate 'string "(" (shift-continuation (node-text prev) 1)))
+               (later (line-break-between-p s (node-end prev) (node-start first)))
+               (gap (if later "" (subseq s (node-end prev) open)))
+               (last-nl (position #\Newline head :from-end t))
+               (column (cond (later
+                              (multiple-value-bind (context line) (context-at node (node-start prev))
+                                (next-line-column (indent-state head 0 (node-column prev) (length head)
+                                                                :state context :first-line line)
+                                                  0)))
+                             (last-nl (+ (- (length head) last-nl 1) (length gap)))
+                             (t (+ (node-column prev) (length head) (length gap))))))
+          (list (make-text-edit (node-start prev) (node-end node)
+                                (concatenate 'string head (if later (format nil "~%~A" (spaces column)) gap)
+                                             (shift-continuation (subseq s (node-start first) (node-end node))
+                                                                 (- column (node-column first))))))))))
 
 (defun barf-forward (parsed node)
   "Move the last element of list NODE out after it."
