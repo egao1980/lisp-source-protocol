@@ -125,12 +125,21 @@ Elements are keywords; comparison is by name, so no symbols are interned.")
 (defmethod eclector.parse-result:make-skipped-input-result
     ((client source-client) stream reason children source)
   (declare (ignore stream))
-  (make-instance 'trivia-node
-                 :kind (let ((s (source-string (client-text client))))
-                         (if (and (< (1+ (car source)) (length s))
-                                  (char= (char s (car source)) #\#)
-                                  (char= (char s (1+ (car source))) #\|))
-                             :block-comment ; also when recovery skipped setting the reason
-                             (skipped-kind reason)))
-                 :start (car source) :end (cdr source)
-                 :value reason :children children :source (client-text client)))
+  (let ((text (client-text client)))
+    (if (and (eq (skipped-kind reason) :feature-skipped)
+             (not (eclector.reader:state-value client '*read-suppress*)))
+        ;; A #+/#- the features reject is still a form of the source; READ-SOURCE
+        ;; gives its branch a CST (READ-EXCLUDED-BRANCH). Inside suppressed
+        ;; input (another excluded branch) it stays trivia of that input.
+        (make-instance 'feature-excluded-node
+                       :kind :feature-conditional :start (car source) :end (cdr source)
+                       :children children :source text)
+        (make-instance 'trivia-node
+                       :kind (let ((s (source-string text)))
+                               (if (and (< (1+ (car source)) (length s))
+                                        (char= (char s (car source)) #\#)
+                                        (char= (char s (1+ (car source))) #\|))
+                                   :block-comment ; also when recovery skipped setting the reason
+                                   (skipped-kind reason)))
+                       :start (car source) :end (cdr source)
+                       :value reason :children children :source text))))

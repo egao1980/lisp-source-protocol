@@ -23,9 +23,7 @@
 (deftest-parametrize trivia-kinds
     ((source kind)
      ("; c" :comment)
-     ("#| b |#" :block-comment)
-     ("#+(or) (x)" :feature-skipped)
-     ("#-sbcl (x)" :feature-skipped))
+     ("#| b |#" :block-comment))
   (let ((ps (read-source source :features '(:sbcl))))
     (ok (equal (kinds ps) (list kind)))
     (ok (null (parsed-source-forms ps)))))

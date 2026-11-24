@@ -63,11 +63,14 @@
                                  "t")))))))
 
 (defun find-definition-nodes (parsed operator name &optional specializers)
-  "Top-level forms (also inside top-level PROGN / EVAL-WHEN) defined by OPERATOR naming NAME."
+  "Top-level forms (also inside top-level PROGN / EVAL-WHEN and #+/#- branches,
+included or not) defined by OPERATOR naming NAME."
   (let ((matches '()))
     (labels ((visit (form)
                (let ((head (node-head-name form)))
-                 (cond ((null head))
+                 (cond ((eq (node-kind form) :feature-conditional)
+                        (mapc #'visit (feature-conditional-forms form)))
+                       ((null head))
                        ((member head '("PROGN" "EVAL-WHEN" "LOCALLY") :test #'string=)
                         (mapc #'visit (cdr (node-forms form))))
                        ((and (string-equal head operator)

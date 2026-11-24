@@ -66,13 +66,16 @@
       (:string (node-value node)))))
 
 (defun outline (parsed)
-  "Top-level definitions of PARSED, descending into PROGN / EVAL-WHEN / LOCALLY."
+  "Top-level definitions of PARSED, descending into PROGN / EVAL-WHEN / LOCALLY
+and into #+/#- branches, whether the reading features include them or not."
   (let ((entries '())
         (package nil))
     (labels ((visit (form)
                (let ((head (node-head-name form))
                      (forms (node-forms form)))
-                 (cond ((null head))
+                 (cond ((eq (node-kind form) :feature-conditional)
+                        (mapc #'visit (feature-conditional-forms form)))
+                       ((null head))
                        ((member head '("PROGN" "EVAL-WHEN" "LOCALLY") :test #'string=)
                         (mapc #'visit (rest forms)))
                        ((string= head "IN-PACKAGE")

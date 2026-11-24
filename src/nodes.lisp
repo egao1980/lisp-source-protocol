@@ -5,7 +5,9 @@
          :documentation "Keyword: :list :vector :string :symbol :number :character :quote
 :quasiquote :unquote :unquote-splicing :function :feature-conditional :dispatch
 :label-definition :label-reference :token for expressions; :comment :block-comment
-:feature-skipped :suppressed :reader-macro :unparsed for trivia.")
+:feature-skipped :suppressed :reader-macro :unparsed for trivia. Every #+/#- form
+is a :feature-conditional expression whether the features include it or not
+(FEATURE-EXCLUDED-P); :feature-skipped is one nested in suppressed input.")
    (start :initarg :start :reader node-start :type fixnum)
    (end :initarg :end :reader node-end :type fixnum)
    (children :initarg :children :initform '() :accessor node-children)
@@ -24,6 +26,35 @@
 
 (defun expression-node-p (x) (typep x 'expression-node))
 (defun trivia-node-p (x) (typep x 'trivia-node))
+
+(defclass feature-excluded-node (expression-node) ()
+  (:documentation "A #+/#- form whose feature expression the reading features
+reject. READ skips it, but it is source text: a :FEATURE-CONDITIONAL
+expression like an included one, so paths, outlines and edits see it."))
+
+(defun feature-excluded-p (node)
+  "True when NODE is a #+/#- form the reading features exclude."
+  (typep node 'feature-excluded-node))
+
+(defun feature-conditional-forms (node)
+  "Expression children of the #+/#- NODE after its feature expression: the
+branch, or NIL when an excluded branch did not read as plain Lisp."
+  (rest (node-forms node)))
+
+(defun feature-prefix (node)
+  "Text of the #+/#- prefixes whose branch NODE is, outermost first, spaces
+squeezed (\"#-sbcl\", \"#+sbcl #+x86-64\"), or NIL."
+  (let ((outer nil))
+    (loop for p = (node-parent node) then (node-parent p)
+          for child = node then (node-parent child)
+          while (and p (eq (node-kind p) :feature-conditional)
+                     (member child (feature-conditional-forms p)))
+          do (setf outer p))
+    (when outer
+      (let ((prefix (subseq (source-string (node-source outer)) (node-start outer) (node-start node))))
+        (format nil "~{~A~^ ~}"
+                (remove "" (uiop:split-string prefix :separator '(#\Space #\Tab #\Newline #\Return))
+                        :test #'string=))))))
 
 (defmethod print-object ((node node) stream)
   (print-unreadable-object (node stream :type t)

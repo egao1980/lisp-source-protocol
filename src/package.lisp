@@ -49,6 +49,10 @@
    #:node-symbol-name
    #:expression-node-p
    #:trivia-node-p
+   #:feature-excluded-node
+   #:feature-excluded-p
+   #:feature-conditional-forms
+   #:feature-prefix
    #:walk-nodes
    ;; diagnostics / imbalance
    #:diagnostic
