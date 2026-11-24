@@ -16,18 +16,21 @@
 (defvar *indentation* (make-hash-table :test #'equal)
   "Symbol name (upcased, no package) → indentation spec: an integer N of
 distinguished arguments, :LOCAL-DEFINITIONS for FLET-like operators,
-:PRESERVE to keep the input's relative indentation (LOOP), or
+:PRESERVE to keep the input's relative indentation (LOOP),
 (:CLAUSES N) for N distinguished arguments followed by clauses whose own
-bodies indent like a one-argument operator (HANDLER-CASE).")
+bodies indent like a one-argument operator (HANDLER-CASE), or (:REST N) for
+arguments N columns in from the paren, aligned with the first one instead
+when it is on the operator's line (COND; Emacs (&rest (&whole N …))).")
 
 (defun set-indentation (name spec)
-  "Record SPEC for operator NAME. SPEC is an integer, :LOCAL-DEFINITIONS, NIL
-(remove), or a Swank/Emacs list spec such as (4 4 &BODY) or (&LAMBDA &BODY):
-the number of elements before &BODY is the distinguished-argument count."
+  "Record SPEC for operator NAME. SPEC is an integer, :LOCAL-DEFINITIONS,
+:PRESERVE, (:CLAUSES N), (:REST N), NIL (remove), or a Swank/Emacs list spec
+such as (4 4 &BODY) or (&LAMBDA &BODY): the number of elements before &BODY is
+the distinguished-argument count."
   (let ((key (string-upcase name))
-        (value (cond ((or (integerp spec) (member spec '(:local-definitions :preserve)) (null spec)
-                         (and (consp spec) (eq (first spec) :clauses)))
-                     spec)
+        (value (cond ((or (integerp spec) (member spec '(:local-definitions :bindings :preserve)) (null spec)
+                          (and (consp spec) (member (first spec) '(:clauses :rest))))
+                      spec)
                      ((listp spec)
                       (let ((body (position-if (lambda (x) (and (symbolp x) (string-equal x "&BODY")))
                                                spec)))
@@ -40,18 +43,18 @@ the number of elements before &BODY is the distinguished-argument count."
 
 (defparameter +standard-indentation+
   '(("BLOCK" . 1) ("CASE" . 1) ("CCASE" . 1) ("ECASE" . 1) ("TYPECASE" . 1)
-    ("CTYPECASE" . 1) ("ETYPECASE" . 1) ("CATCH" . 1) ("DEFCONSTANT" . 1)
+    ("CTYPECASE" . 1) ("ETYPECASE" . 1) ("CATCH" . 1) ("COND" :rest 2) ("DEFCONSTANT" . 1)
     ("DEFPARAMETER" . 1) ("DEFVAR" . 1) ("DEFPACKAGE" . 1) ("DEFINE-PACKAGE" . 1)
     ("DEFSTRUCT" . 1) ("DESTRUCTURING-BIND" . 2) ("DO" . 2) ("DO*" . 2)
     ("DOLIST" . 1) ("DOTIMES" . 1) ("EVAL-WHEN" . 1) ("FLET" . :local-definitions)
     ("LABELS" . :local-definitions) ("MACROLET" . :local-definitions)
-    ("HANDLER-BIND" . 1) ("HANDLER-CASE" :clauses 1) ("RESTART-BIND" . 1)
+    ("HANDLER-BIND" . :bindings) ("HANDLER-CASE" :clauses 1) ("RESTART-BIND" . :bindings)
     ("RESTART-CASE" :clauses 1) ("WHEN-LET" . 1) ("WHEN-LET*" . 1) ("IF-LET" . 1)
     ("IF-LET*" . 1) ("SWITCH" . 1) ("ESWITCH" . 1) ("CSWITCH" . 1) ("DESTRUCTURING-CASE" :clauses 1) ("WITH-SLOTS" . 2)
     ("WITH-ACCESSORS" . 2)
-    ("IGNORE-ERRORS" . 0) ("LAMBDA" . 1) ("LET" . 1) ("LET*" . 1) ("LOCALLY" . 0) ("LOOP" . :preserve)
+    ("IGNORE-ERRORS" . 0) ("LAMBDA" . 1) ("LET" . :bindings) ("LET*" . :bindings) ("LOCALLY" . 0) ("LOOP" . :preserve)
     ("MULTIPLE-VALUE-BIND" . 2) ("MULTIPLE-VALUE-PROG1" . 1) ("PROG1" . 1) ("PROG2" . 2)
-    ("PROGN" . 0) ("PROGV" . 2) ("RETURN-FROM" . 1) ("SYMBOL-MACROLET" . 1)
+    ("PROGN" . 0) ("PROGV" . 2) ("RETURN-FROM" . 1) ("SYMBOL-MACROLET" . :bindings)
     ("TAGBODY" . 0) ("UNLESS" . 1) ("UNWIND-PROTECT" . 1) ("WHEN" . 1)
     ("PRINT-UNREADABLE-OBJECT" . 1) ("DEFTEST" . 1) ("TESTING" . 1)
     ("DEFSYSTEM" . 1) ("DEFINE-CONDITION" . 2) ("DEFCLASS" . 2) ("DEFGENERIC" . 2)
@@ -130,49 +133,56 @@ the line starts with a keyword."
         base
         (let ((n (frame-element-count frame))
               (open (frame-open-col frame)))
-          (cond ((zerop n) (1+ open))
-                ;; Keyword head in code, (:export #:a #:b): a line that starts
-                ;; with a keyword aligns with the head (plist style), any other
-                ;; line with the first argument when it is on the head's line.
-                ((and (eq (frame-head-kind frame) :keyword)
-                      (eq (frame-kind frame) :code)
-                      (not (frame-forced-spec frame))
-                      (not keyword-line))
-                 (let ((first-arg (frame-element frame 1)))
-                   (if (and first-arg (= (second first-arg) (frame-open-line frame)))
-                       (car first-arg)
-                       (car (frame-element frame 0)))))
-                ((or (member (frame-kind frame) '(:data :local-definitions))
-                     (and (not (eq (frame-head-kind frame) :symbol))
-                          (not (frame-forced-spec frame))))
-                 (car (frame-element frame 0)))
-                (t
-                 (let ((spec (frame-spec frame)))
-                   (when (consp spec) (setf spec (second spec)))
-                   (cond ((and (eq spec :preserve) old-indent)
-                          (max (1+ open) (+ old-indent (- open (frame-orig-open-col frame)))))
-                         ((eq spec :preserve)
-                          (let ((first-arg (frame-element frame 1)))
-                            (if first-arg (car first-arg) (1+ open))))
-                         ((integerp spec) (if (<= n spec) (+ open 4) (+ open 2)))
-                         ((eq spec :local-definitions) (if (<= n 1) (+ open 4) (+ open 2)))
-                         (t
-                          (let* ((first-arg (frame-element frame 1))
-                                 (open-line (frame-open-line frame))
-                                 (keyword-arg
-                                   (and keyword-line first-arg (not (third first-arg))
-                                        ;; keyword/value pairs on the operator's line
-                                        (loop for k from 2 below n
-                                              for e = (frame-element frame k)
-                                              when (and (third e) (= (second e) open-line))
-                                                return (and (evenp (loop for j from k below n
-                                                                         count (= (second (frame-element frame j))
-                                                                                  open-line)))
-                                                            e)))))
-                            (cond (keyword-arg (car keyword-arg))
-                                  ((and first-arg (= (second first-arg) open-line))
-                                   (car first-arg))
-                                  (t (1+ open)))))))))))))
+          (flet ((first-arg-on-open-line ()
+                   (let ((first-arg (frame-element frame 1)))
+                     (and first-arg (= (second first-arg) (frame-open-line frame)) first-arg))))
+            (cond ((zerop n) (1+ open))
+                  ;; Keyword head in code, (:export #:a #:b): a line that starts
+                  ;; with a keyword aligns with the head (plist style), any other
+                  ;; line with the first argument when it is on the head's line.
+                  ((and (eq (frame-head-kind frame) :keyword)
+                        (eq (frame-kind frame) :code)
+                        (not (frame-forced-spec frame))
+                        (not keyword-line))
+                   (let ((first-arg (first-arg-on-open-line)))
+                     (if first-arg
+                         (car first-arg)
+                         (car (frame-element frame 0)))))
+                  ((or (member (frame-kind frame) '(:data :local-definitions :bindings))
+                       (and (not (eq (frame-head-kind frame) :symbol))
+                            (not (frame-forced-spec frame))))
+                   (car (frame-element frame 0)))
+                  (t
+                   (let ((spec (frame-spec frame)))
+                     (cond ((and (consp spec) (eq (first spec) :rest))
+                            (let ((first-arg (first-arg-on-open-line)))
+                              (if first-arg (car first-arg) (+ open (second spec)))))
+                           (t
+                            (when (consp spec) (setf spec (second spec)))
+                            (cond ((and (eq spec :preserve) old-indent)
+                                   (max (1+ open) (+ old-indent (- open (frame-orig-open-col frame)))))
+                                  ((eq spec :preserve)
+                                   (let ((first-arg (frame-element frame 1)))
+                                     (if first-arg (car first-arg) (1+ open))))
+                                  ((integerp spec) (if (<= n spec) (+ open 4) (+ open 2)))
+                                  ((member spec '(:local-definitions :bindings)) (if (<= n 1) (+ open 4) (+ open 2)))
+                                  (t
+                                   (let* ((first-arg (frame-element frame 1))
+                                          (open-line (frame-open-line frame))
+                                          (keyword-arg
+                                            (and keyword-line first-arg (not (third first-arg))
+                                                 ;; keyword/value pairs on the operator's line
+                                                 (loop for k from 2 below n
+                                                       for e = (frame-element frame k)
+                                                       when (and (third e) (= (second e) open-line))
+                                                         return (and (evenp (loop for j from k below n
+                                                                                  count (= (second (frame-element frame j))
+                                                                                           open-line)))
+                                                                     e)))))
+                                     (cond (keyword-arg (car keyword-arg))
+                                           ((and first-arg (= (second first-arg) open-line))
+                                            (car first-arg))
+                                           (t (1+ open))))))))))))))))
 
 (defun token-char-p (c)
   (not (member c '(#\Space #\Tab #\Newline #\Return #\Page #\( #\) #\" #\; #\' #\` #\,))))
@@ -196,7 +206,7 @@ frame it belongs to and whether it counts (not absorbed by a prefix)."
                          (t (push (list (col) line-number (char= (char line i) #\:)) (frame-elements frame))
                             (setf (frame-pending frame) prefix)
                             (values frame t)))))
-               (push-frame (kind)
+               (push-frame (kind &optional (counted t))
                  (let* ((parent (first stack))
                         (parent-index (and parent (1- (frame-element-count parent))))
                         (parent-kind (and parent (frame-kind parent)))
@@ -204,12 +214,18 @@ frame it belongs to and whether it counts (not absorbed by a prefix)."
                    (push (make-indent-frame
                           :open-col (col) :orig-open-col (- (col) shift) :open-line line-number
                           :kind (cond ((eq kind :data) :data)
-                                      ((and (eq parent-spec :local-definitions) (eql parent-index 1))
-                                       :local-definitions)
+                                      ((and counted (member parent-spec '(:local-definitions :bindings))
+                                            (eql parent-index 1))
+                                       parent-spec)
                                       (t :code))
+                          ;; a local function's body indents like a DEFUN's, a
+                          ;; binding's value 2 in unless it starts on the binding's
+                          ;; line (SLIME's let), a clause like a one-argument
+                          ;; operator
                           :forced-spec (cond ((eq parent-kind :local-definitions) 1)
-                                             ((and (consp parent-spec) parent-index
-                                                   (> parent-index (second parent-spec)))
+                                             ((eq parent-kind :bindings) '(:rest 2))
+                                             ((and (consp parent-spec) (eq (first parent-spec) :clauses)
+                                                   parent-index (> parent-index (second parent-spec)))
                                               1)))
                          stack)))
                (read-token ()
@@ -265,7 +281,7 @@ frame it belongs to and whether it counts (not absorbed by a prefix)."
                       (case c
                         ((#\Space #\Tab #\Return #\Page) (incf i))
                         (#\; (setf i n))
-                        (#\( (start-element) (push-frame :code) (incf i))
+                        (#\( (push-frame :code (nth-value 1 (start-element))) (incf i))
                         (#\) (when stack (pop stack)) (incf i))
                         (#\" (start-element) (setf in-string t) (incf i))
                         ((#\' #\`) (start-element :prefix 1) (incf i)
@@ -300,50 +316,100 @@ frame it belongs to and whether it counts (not absorbed by a prefix)."
             (third state) block-depth)
       state)))
 
-(defun indent-code (text &key (column 0) (input-column column))
+(defun indent-state (string start start-column offset &key (state (list '() nil 0)) (first-line 0))
+  "The indenter state at OFFSET of STRING, scanned from START (at
+START-COLUMN) on from STATE (default: outside any list): the lists open at
+OFFSET and what they hold so far. FIRST-LINE is the line number of START.
+Second value: the line number of OFFSET. Pass both to INDENT-CODE as
+:CONTEXT and :FIRST-LINE."
+  (let ((line first-line))
+    (loop with pos = start
+          for col0 = start-column then 0
+          for eol = (or (position #\Newline string :start pos :end offset) offset)
+          do (scan-indent-line (subseq string pos eol) line col0 state)
+          while (< eol offset)
+          do (setf pos (1+ eol))
+             (incf line))
+    (values state line)))
+
+(defun next-line-column (state base &key outer sibling-column old-indent keyword-line)
+  "Indentation of a line that starts at the end of the indenter's STATE.
+BASE is the column of a top-level line. When the innermost open list is
+OUTER (the context stack INDENT-CODE started from), the line starts an
+element next to the code around it and gets SIBLING-COLUMN when given."
+  (if (and sibling-column outer (eq (first state) outer))
+      sibling-column
+      (line-indent-for (first state) base :old-indent old-indent :keyword-line keyword-line)))
+
+(defun indent-code (text &key (column 0) (input-column column) context (first-line 0) sibling-column)
   "TEXT with every line after the first re-indented, as if TEXT started at
 COLUMN. INPUT-COLUMN is where TEXT's first line was in its old place (used to
-keep LOOP clauses' relative layout). Lines that begin inside a string or block
-comment keep their whitespace; blank lines lose trailing blanks."
-  (let ((lines (uiop:split-string text :separator '(#\Newline)))
-        (state (list '() nil 0)))
-    (with-output-to-string (out)
-      (loop for line in lines
-            for number from 0
-            do (let ((verbatim (or (zerop number) (second state) (plusp (third state)))))
-                 (if verbatim
-                     (progn
-                       (unless (zerop number) (terpri out))
-                       (write-string line out)
-                       (scan-indent-line line number (if (zerop number) column 0) state
-                                         (if (zerop number) (- column input-column) 0)))
-                     (let* ((trimmed (string-left-trim '(#\Space #\Tab) line))
-                            (old-indent (- (length line) (length trimmed)))
-                            (blank (zerop (length (string-right-trim '(#\Space #\Tab #\Return) trimmed))))
-                            (indent (if blank
-                                        0
-                                        (line-indent-for (first state) column
-                                                         :old-indent old-indent
-                                                         :keyword-line (char= (char trimmed 0) #\:)))))
-                       (terpri out)
-                       (unless blank
-                         (write-string (make-string indent :initial-element #\Space) out)
-                         (write-string trimmed out)
-                         (scan-indent-line trimmed number indent state (- indent old-indent))))))))))
+keep LOOP clauses' relative layout). CONTEXT is the indenter state where TEXT
+goes, from INDENT-STATE, and FIRST-LINE the line number it was scanned to: a
+form then indents as part of the lists around it (a local function, a
+clause). A line that starts an element of the innermost of those lists gets
+SIBLING-COLUMN when given. Lines that begin inside a string or block comment
+keep their whitespace; blank lines lose trailing blanks.
+Second value: the indenter state after TEXT, for NEXT-LINE-COLUMN."
+  (let* ((lines (uiop:split-string text :separator '(#\Newline)))
+         (state (or context (list '() nil 0)))
+         ;; with a context, a line outside every list is a top-level one
+         (base (if context 0 column))
+         (outer (first state)))
+    (values
+     (with-output-to-string (out)
+       (loop for line in lines
+             for index from 0
+             for number from first-line
+             do (let ((verbatim (or (zerop index) (second state) (plusp (third state)))))
+                  (if verbatim
+                      (progn
+                        (unless (zerop index) (terpri out))
+                        (write-string line out)
+                        (scan-indent-line line number (if (zerop index) column 0) state
+                                          (if (zerop index) (- column input-column) 0)))
+                      (let* ((trimmed (string-left-trim '(#\Space #\Tab) line))
+                             (old-indent (- (length line) (length trimmed)))
+                             (blank (zerop (length (string-right-trim '(#\Space #\Tab #\Return) trimmed))))
+                             (indent (if blank
+                                         0
+                                         (next-line-column state base
+                                                           :outer outer :sibling-column sibling-column
+                                                           :old-indent old-indent
+                                                           :keyword-line (char= (char trimmed 0) #\:)))))
+                        (terpri out)
+                        (unless blank
+                          (write-string (make-string indent :initial-element #\Space) out)
+                          (write-string trimmed out)
+                          (scan-indent-line trimmed number indent state (- indent old-indent))))))))
+     state)))
+
+(defun shift-continuation (text delta)
+  "TEXT with every line after the first moved DELTA columns (left by at most
+its leading blanks), except lines that begin inside a string or block
+comment: their text is part of the string or comment."
+  (if (zerop delta)
+      text
+      (let ((state (list '() nil 0)))
+        (with-output-to-string (out)
+          (loop for line in (uiop:split-string text :separator '(#\Newline))
+                for index from 0
+                do (unless (zerop index) (terpri out))
+                   (let ((blanks (or (position-if-not (lambda (c) (member c '(#\Space #\Tab))) line)
+                                     (length line))))
+                     (cond ((or (zerop index) (second state) (plusp (third state)) (= blanks (length line)))
+                            (write-string line out))
+                           ((plusp delta)
+                            (write-string (make-string delta :initial-element #\Space) out)
+                            (write-string line out))
+                           (t (write-string line out :start (min blanks (- delta))))))
+                   (scan-indent-line line index 0 state))))))
 
 (defun dedent-continuation (text column)
   "Remove up to COLUMN leading blanks from every line of TEXT after the first,
-undoing the indentation a form had at COLUMN in its old place."
-  (if (zerop column)
-      text
-      (let ((lines (uiop:split-string text :separator '(#\Newline))))
-        (format nil "~{~A~^~%~}"
-                (cons (first lines)
-                      (mapcar (lambda (line)
-                                (let ((blanks (or (position-if-not (lambda (c) (char= c #\Space)) line)
-                                                  (length line))))
-                                  (subseq line (min blanks column))))
-                              (rest lines)))))))
+undoing the indentation a form had at COLUMN in its old place. Lines inside
+strings and block comments are kept."
+  (shift-continuation text (- column)))
 
 (defun macro-lambda-list-indentation (lambda-list)
   "Distinguished-argument count for a DEFMACRO LAMBDA-LIST node: the positional

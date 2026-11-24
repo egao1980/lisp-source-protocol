@@ -36,7 +36,7 @@
      ("(a (b c d))" '(0 1) #'barf-forward '() "(a (b c) d)")
      ("(a (b c d))" '(0 1) #'barf-backward '() "(a b (c d))")
      ("(a b c)" '(0 1) #'transpose-nodes '() "(a c b)")
-     ((lines "(a)" "(b)") '(0) #'slurp-forward '() (lines "(a" "(b))"))
+     ((lines "(a)" "(b)") '(0) #'slurp-forward '() (lines "(a" " (b))"))
      ("(a) (b c)" '(1) #'barf-forward '() "(a) (b) c")
      ((lines "(defun f ()" "  (old))") '(0 3) #'replace-node
       (list (lines "(let ((x 1))" "  x)"))
