@@ -246,6 +246,16 @@ transpose and move carry those comments with the form."
     (loop for (a b) on forms
           when (eq b node) do (return a))))
 
+(defun conditional-unit (node)
+  "NODE, or the outermost #+/#- conditional whose branch it is: inserting
+next to, deleting, transposing or moving a branch's form acts on the whole
+conditional, so its prefix never captures another form."
+  (loop for parent = (node-parent node)
+        while (and parent (eq (node-kind parent) :feature-conditional)
+                   (member node (feature-conditional-forms parent)))
+        do (setf node parent))
+  node)
+
 (defun ensure-editable (node operation)
   (when (node-recovered-p node)
     (restart-case (error 'edit-on-recovered-node :node node)
@@ -307,26 +317,30 @@ dotted lists have no free positions to edit."
         (t " ")))
 
 (defun insert-after (parsed node text)
-  "Insert the forms read from TEXT after NODE, as siblings."
-  (ensure-editable node :insert-after)
-  (ensure-sibling-context node :insert-after)
-  (let ((forms (read-edit-input text)))
-    (plan parsed :insert-after
-          (list (make-text-edit (node-end node) (node-end node)
-                                (concatenate 'string (separator-for node)
-                                             (join-forms-text node forms))))
-          :form-delta (if (top-level-node-p node) (length forms) 0))))
+  "Insert the forms read from TEXT after NODE, as siblings. Every form is
+written, #+/#- ones included whatever the reading features."
+  (let ((node (conditional-unit node)))
+    (ensure-editable node :insert-after)
+    (ensure-sibling-context node :insert-after)
+    (let ((forms (read-edit-input text)))
+      (plan parsed :insert-after
+            (list (make-text-edit (node-end node) (node-end node)
+                                  (concatenate 'string (separator-for node)
+                                               (join-forms-text node forms))))
+            :form-delta (if (top-level-node-p node) (length forms) 0)))))
 
 (defun insert-before (parsed node text)
-  "Insert the forms read from TEXT before NODE, as siblings."
-  (ensure-editable node :insert-before)
-  (ensure-sibling-context node :insert-before)
-  (let ((forms (read-edit-input text)))
-    (plan parsed :insert-before
-          (list (make-text-edit (node-start node) (node-start node)
-                                (concatenate 'string (join-forms-text node forms)
-                                             (separator-for node))))
-          :form-delta (if (top-level-node-p node) (length forms) 0))))
+  "Insert the forms read from TEXT before NODE, as siblings. Every form is
+written, #+/#- ones included whatever the reading features."
+  (let ((node (conditional-unit node)))
+    (ensure-editable node :insert-before)
+    (ensure-sibling-context node :insert-before)
+    (let ((forms (read-edit-input text)))
+      (plan parsed :insert-before
+            (list (make-text-edit (node-start node) (node-start node)
+                                  (concatenate 'string (join-forms-text node forms)
+                                               (separator-for node))))
+            :form-delta (if (top-level-node-p node) (length forms) 0)))))
 
 (defun join-forms-text (node forms)
   (let ((sep (separator-for node))
@@ -337,7 +351,9 @@ dotted lists have no free positions to edit."
                (when more (write-string sep out))))))
 
 (defun delete-node (parsed node)
-  "Delete NODE and the whitespace that separated it from its neighbours."
+  "Delete NODE and the whitespace that separated it from its neighbours. The
+form of a #+/#- branch goes with its prefix."
+  (setf node (conditional-unit node))
   (ensure-editable node :delete)
   (ensure-sibling-context node :delete)
   (let* ((s (node-string node))
@@ -476,6 +492,7 @@ HEAD's operator; a one-line NODE stays on HEAD's line."
 
 (defun transpose-nodes (parsed node)
   "Swap NODE with its next sibling."
+  (setf node (conditional-unit node))
   (ensure-editable node :transpose)
   (ensure-sibling-context node :transpose)
   (let ((next (next-sibling node)))
@@ -499,6 +516,8 @@ HEAD's operator; a one-line NODE stays on HEAD's line."
 another source. Returns a list of plans: one when both are in PARSED, else
 the deletion from PARSED and the insertion into TARGET-PARSED. Verify every
 plan before committing any."
+  (setf node (conditional-unit node)
+        target (conditional-unit target))
   (ensure-editable node :move)
   (ensure-sibling-context node :move)
   (ensure-editable target :move)

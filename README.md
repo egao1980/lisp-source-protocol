@@ -4,8 +4,9 @@ Lossless Common Lisp source trees on [Eclector](https://github.com/s-expressioni
 
 - **Never evaluates.** `#.` yields a `read-eval-placeholder` plus a `read-time-eval-refused` signal; `#S` is not constructed.
 - **Never interns.** Symbols are `symbol-token`s (package string / `:current` / `:keyword` / `nil`, name). Unknown packages are fine.
-- **Lossless.** Every node is a range of the original text; comments, `#|…|#` and skipped `#+`/`#-` forms are `trivia-node`s. Every non-whitespace character is covered.
-- **Broken files stay navigable.** A form that runs into end of input is re-read up to the next column-0 `(`, so one typo damages one form. Each problem becomes an `imbalance` (kind, opener, suggested fix offset, confidence). Paren-count plus indentation inference, parinfer-style.
+- **Lossless.** Every node is a range of the original text; comments and `#|…|#` are `trivia-node`s. Every non-whitespace character is covered.
+- **Reader conditionals are source.** Every `#+`/`#-` form is a `:feature-conditional` expression whatever the features: an excluded one (`feature-excluded-p`) is a form like an included one, and its branch is re-read as plain Lisp, so paths, outlines, definition locators, references and edits see every branch. A branch in another implementation's reader syntax stays one opaque form, its text kept. Features only decide `node-value` and `feature-excluded-p`.
+- **Broken files stay navigable.** A form that runs into end of input is re-read up to the next column-0 `(` or `#+`/`#-`, so one typo damages one form. Each problem becomes an `imbalance` (kind, opener, suggested fix offset, confidence). Paren-count plus indentation inference, parinfer-style.
 
 ```lisp
 (asdf:load-system "lisp-source-protocol")
@@ -30,7 +31,8 @@ Lossless Common Lisp source trees on [Eclector](https://github.com/s-expressioni
 | `build-package-model` / `resolve-symbol-token` / `package-at` | static package model from `defpackage` / `define-package` (`:use`, `:import-from`, `:shadow`, `:local-nicknames`, nicknames); host packages via `find-package` (lookup only) |
 | `find-references` / `find-definitions` | across sources, by resolved package + name; includes `defpackage` designators |
 | `lint` / `*lint-rules*` / `run-lint-rule` | `:unused-variable` `:missing-in-package` `:undefined-export` `:missing-docstring` `:asd-missing-component`; add a rule with an `eql` method |
-| `*source-features*` | feature list for `#+`/`#-` (default host `*features*`), compared by name |
+| `*source-features*` | feature list for `#+`/`#-` (default host `*features*`), compared by name: sets `feature-excluded-p`, never which forms exist |
+| `feature-excluded-p` / `feature-conditional-forms` / `feature-prefix` | an excluded `#+`/`#-`; a conditional's branch nodes; the `#-sbcl` prefix text a branch form sits under |
 
 ## Structural editing
 
@@ -46,7 +48,7 @@ Operations never write text: each returns an `edit-plan` (non-overlapping replac
 
 | Ops | |
 |-----|--|
-| `replace-node` `insert-before` `insert-after` `delete-node` | input text must read clean (`edit-input-unreadable`); inserted code is re-indented at the node's column (see below) |
+| `replace-node` `insert-before` `insert-after` `delete-node` | input text must read clean (`edit-input-unreadable`); every `#+`/`#-` form in it is written and counted, whatever the features; inserted code is re-indented at the node's column (see below) |
 | `wrap-node` `splice-node` `raise-node` `transpose-nodes` | `wrap-node` re-indents the wrapped form |
 | `move-node` | to before/after a target form, in the same file (one plan) or another (two plans: verify both, then commit) |
 | `slurp-forward` / `-backward`, `barf-forward` / `-backward` | proper `(…)` lists only |
@@ -54,7 +56,7 @@ Operations never write text: each returns an `edit-plan` (non-overlapping replac
 | `add-export` | appends in the existing designator style, or adds an `(:export …)` option |
 | `repair-parens` | applies an `imbalance` fix; accepted only if problems decrease |
 
-Refused with `edit-not-applicable`: sibling edits under `#+`/`#-`, quote or backquote prefixes, the consing dot, dotted lists. Nodes built by recovery signal `edit-on-recovered-node` (`continue` to force).
+Insert, delete, transpose and move on the form of a `#+`/`#-` branch act on the whole conditional, prefix included. Refused with `edit-not-applicable`: other sibling edits under `#+`/`#-` (the feature expression, slurp / barf), quote or backquote prefixes, the consing dot, dotted lists. Nodes built by recovery signal `edit-on-recovered-node` (`continue` to force).
 
 ## Indentation
 

@@ -158,7 +158,8 @@
   (let ((out '()))
     (labels ((visit (node)
                ;; Quoted data and backquote templates are not code.
-               (unless (member (node-kind node) '(:quote :quasiquote :feature-skipped))
+               (unless (or (member (node-kind node) '(:quote :quasiquote))
+                           (feature-excluded-p node))
                  (when (eq (node-kind node) :list)
                    (setf out (revappend (binding-form-diagnostics node) out)))
                  (mapc #'visit (node-forms node)))))
@@ -221,7 +222,7 @@ accessors, DEFSTRUCT functions, and any :ACCESSOR / :READER / :WRITER value."
   (let ((names (make-hash-table :test #'equal)))
     (labels ((note (n) (when n (setf (gethash n names) t)))
              (visit (node)
-               (unless (member (node-kind node) '(:quote :feature-skipped))
+               (unless (or (eq (node-kind node) :quote) (feature-excluded-p node))
                  (when (eq (node-kind node) :list)
                    (let* ((forms (node-forms node))
                           (head (node-head-name node)))

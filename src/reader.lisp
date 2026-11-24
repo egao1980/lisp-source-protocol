@@ -51,12 +51,18 @@ plain CL reader errors."
                    :start pos :end (+ pos (max len 0)))))
 
 (defun find-cut (string start end)
-  "Offset of the first #\\( at column 0 on a line after the line holding START, below END."
-  (loop for i = (position #\Newline string :start start :end end)
-          then (position #\Newline string :start (1+ i) :end end)
-        while i
-        when (and (< (1+ i) end) (char= (char string (1+ i)) #\())
-          do (return (1+ i))))
+  "Offset of the first #\\( or #+ / #- at column 0 on a line after the line
+holding START, below END: where the next top-level form likely starts."
+  (flet ((form-start-p (i)
+           (or (char= (char string i) #\()
+               (and (< (1+ i) end)
+                    (char= (char string i) #\#)
+                    (member (char string (1+ i)) '(#\+ #\-))))))
+    (loop for i = (position #\Newline string :start start :end end)
+            then (position #\Newline string :start (1+ i) :end end)
+          while i
+          when (and (< (1+ i) end) (form-start-p (1+ i)))
+            do (return (1+ i)))))
 
 (defun eof-condition-p (c)
   (typep c 'eclector.base:end-of-file))
@@ -201,17 +207,45 @@ at column 0, so the damage spans [anchor start, stray)."
                                         :message "Stray closing parenthesis"))))))))
 
 (defun read-time-eval-diagnostics (nodes)
+  "#. warnings for NODES, outside branches the features exclude (never read
+by this image, so nothing there would be evaluated)."
   (let ((out '()))
-    (walk-nodes (lambda (n)
-                  (when (read-eval-placeholder-p (node-value n))
-                    (signal 'read-time-eval-refused :node n)
-                    (push (make-instance 'diagnostic
-                                         :severity :warning :kind :read-time-eval
-                                         :message "#. form not evaluated"
-                                         :start (node-start n) :end (node-end n))
-                          out)))
-                nodes)
+    (labels ((walk (n)
+               (when (read-eval-placeholder-p (node-value n))
+                 (signal 'read-time-eval-refused :node n)
+                 (push (make-instance 'diagnostic
+                                      :severity :warning :kind :read-time-eval
+                                      :message "#. form not evaluated"
+                                      :start (node-start n) :end (node-end n))
+                       out))
+               (unless (feature-excluded-p n)
+                 (mapc #'walk (node-children n)))))
+      (mapc #'walk nodes))
     (nreverse out)))
+
+(defun read-excluded-branch (client text node)
+  "Give the excluded #+/#- NODE a CST of its branch: re-read the text after its
+feature expression as plain Lisp. A branch that does not read cleanly here
+(another implementation's reader syntax) keeps the suppressed input, so NODE
+stays one opaque form."
+  (let* ((children (node-children node))
+         (feature (find-if #'expression-node-p children)))
+    (when feature
+      (multiple-value-bind (nodes diags broken)
+          (read-segment client text (node-end feature) (node-end node))
+        (when (and (null broken)
+                   (notany (lambda (d) (eq (diagnostic-severity d) :error)) diags)
+                   (some #'expression-node-p nodes))
+          (setf (node-children node)
+                (append (ldiff children (rest (member feature children))) nodes)))))))
+
+(defun read-excluded-branches (client text nodes)
+  "READ-EXCLUDED-BRANCH for every excluded conditional in NODES, nested ones
+included (a re-read branch can hold excluded conditionals of its own)."
+  (walk-nodes (lambda (n)
+                (when (feature-excluded-p n)
+                  (read-excluded-branch client text n)))
+              nodes))
 
 (defun script-header-end (string)
   "End of a leading #! line (a Roswell or SBCL --script file), or 0. The line
@@ -261,6 +295,7 @@ the damage stays inside that form; the result records an IMBALANCE."
                             diags (append diags fdiags2))
                       (push (eof-imbalance text result2 conds2 cut) imbalances)))
                   (setf start cut)))))))
+    (read-excluded-branches client text nodes)
     (setf nodes (sort nodes #'< :key #'node-start))
     (setf imbalances (append (nreverse imbalances)
                              (extra-close-imbalances text nodes diags)))
