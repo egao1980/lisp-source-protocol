@@ -271,7 +271,11 @@ conditional, so its prefix never captures another form."
     (restart-case (error 'edit-on-recovered-node :node node)
       (continue () :report "Edit the recovered node anyway" nil)))
   (unless (node-parent node)
-    (error 'edit-not-applicable :operation operation :node node :reason "the root is not editable")))
+    (error 'edit-not-applicable :operation operation :node node :reason "the root is not editable"))
+  (when (and (comment-block-p node)
+             (not (member operation '(:replace :delete :insert-after :insert-before))))
+    (error 'edit-not-applicable :operation operation :node node
+                                :reason "a comment block takes replace, delete or insert only")))
 
 (defun consing-dot-node-p (node)
   (and node (eq (node-kind node) :token) (string= (node-text node) ".")))
@@ -385,11 +389,13 @@ in between), or NODE-START. NODE starts its line."
   (ends-in-comment nil))
 
 (defun trailing-input-comment (input)
-  "The ; comment after the last form of edit input INPUT, on that form's line."
+  "The ; comment after the last form of edit input INPUT, on that form's line
+(not one on the line after another ; comment)."
   (let* ((nodes (parsed-source-nodes input))
          (last (car (last nodes)))
          (before (car (last nodes 2))))
     (and (eq (node-kind last) :comment) (not (eq before last))
+         (expression-node-p before)
          (not (line-break-between-p (node-string last) (node-end before) (node-start last)))
          last)))
 
@@ -440,7 +446,9 @@ parens."
 written around it. A comment before the form starts its own line; one after
 it goes after the closing parens that follow NODE, or, when code follows on
 the line, that code moves to the next line."
-  (ensure-editable node :replace)
+  (if (comment-block-p node)
+      (return-from replace-node (replace-comment-block parsed node new-text))
+      (ensure-editable node :replace))
   (when (consing-dot-node-p node)
     (error 'edit-not-applicable :operation :replace :node node :reason "the consing dot"))
   (let* ((input (read-edit-source new-text :min 1 :max 1))
@@ -498,6 +506,47 @@ the line, that code moves to the next line."
                                                                                 (- column (node-column follow)))))))
                             (t (make-text-edit from end text)))))
                    (t (make-text-edit from end (concatenate 'string text (input-tail layout))))))))))))
+
+(defun replace-comment-block (parsed block new-text)
+  "Replace comment block BLOCK (COMMENT-BLOCK-AT) with NEW-TEXT: comments,
+forms or both, read as edit input (reader-clean and balanced), laid out at the
+block's column. Forms written at the top level change the form count."
+  (ensure-editable block :replace)
+  (let ((input (read-edit-source new-text :min 0)))
+    (unless (parsed-source-nodes input)
+      (error 'edit-input-unreadable
+             :text new-text
+             :diagnostics (list (make-instance 'diagnostic
+                                               :severity :error :kind :form-count
+                                               :message "expected comments or forms; delete removes a comment block"
+                                               :start 0 :end (length new-text)))))
+    (let* ((layout (lay-out-input input))
+           (text (lay-out-code (input-text layout) block (node-start block)
+                               :input-column (input-column layout)
+                               :sibling-column (unless (top-level-node-p block) (node-column block))
+                               :shift (- (node-column block) (input-column layout)))))
+      (plan parsed :replace
+            (list (make-text-edit (node-start block) (node-end block)
+                                  (concatenate 'string text (input-tail layout))))
+            :form-delta (if (top-level-node-p block) (length (parsed-source-forms input)) 0)))))
+
+(defun delete-comment-block (parsed block)
+  "Delete the lines of comment block BLOCK (COMMENT-BLOCK-AT). After a blank
+line or at the start of the file the blank lines after it go too; at the end of
+the file the blank lines before it, keeping the final newline."
+  (ensure-editable block :delete)
+  (let* ((s (node-string block))
+         (from (line-start s (node-start block)))
+         (to (min (length s) (1+ (line-end s (node-end block)))))
+         (rest (skip-ws-forward s to)))
+    (plan parsed :delete
+          (list (cond ((= rest (length s))
+                       (let ((from (skip-ws-backward s from)))
+                         (make-text-edit from (length s) (if (plusp from) (string #\Newline) ""))))
+                      ((or (zerop from)
+                           (every #'ws-char-p (subseq s (line-start s (1- from)) from)))
+                       (make-text-edit from (line-start s rest) ""))
+                      (t (make-text-edit from to "")))))))
 
 (defun separator-for (node)
   "Whitespace placed between NODE and an inserted sibling."
@@ -649,7 +698,9 @@ comment; else NODE stays on the line, after it."
 (defun delete-node (parsed node)
   "Delete NODE and the whitespace that separated it from its neighbours. The
 form of a #+/#- branch goes with its prefix."
-  (setf node (conditional-unit node))
+  (if (comment-block-p node)
+      (return-from delete-node (delete-comment-block parsed node))
+      (setf node (conditional-unit node)))
   (ensure-editable node :delete)
   (ensure-sibling-context node :delete)
   (let* ((s (node-string node))

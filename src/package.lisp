@@ -192,4 +192,8 @@
    #:edit-result-plan
    #:edit-result-parsed
    #:edit-result-diff
-   #:edit-result-written-p))
+   #:edit-result-written-p
+   #:comment-block-node
+   #:comment-block-p
+   #:comment-block-at
+   #:comment-blocks))

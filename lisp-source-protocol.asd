@@ -1,5 +1,5 @@
 (defsystem "lisp-source-protocol"
-  :version "0.2.6"
+  :version "0.2.7"
   :description "Lossless Eclector CST, heuristic recovery and static analysis for Common Lisp source"
   :author "egao1980"
   :license "MIT"
@@ -36,6 +36,7 @@
                (:file "conditional-test")
                (:file "indent-test")
                (:file "layout-test")
+               (:file "comment-test")
                (:file "corpus-test"))
   :perform (test-op (o c)
              (unless (symbol-call :rove :run c)

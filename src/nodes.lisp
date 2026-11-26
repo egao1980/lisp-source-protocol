@@ -27,6 +27,18 @@ is a :feature-conditional expression whether the features include it or not
 (defun expression-node-p (x) (typep x 'expression-node))
 (defun trivia-node-p (x) (typep x 'trivia-node))
 
+(defclass comment-block-node (trivia-node) ()
+  (:documentation "Consecutive ; and #| |# comments of one list or of the top
+level, each on lines of its own, no blank line between them: kind
+:COMMENT-BLOCK, from the first comment's start to the end of the last one's
+text (before its newline). Built by COMMENT-BLOCK-AT and COMMENT-BLOCKS, not by
+the reader: CHILDREN are the comment nodes and PARENT is their parent, but the
+block is not among that parent's children."))
+
+(defun comment-block-p (x)
+  "True when X is a COMMENT-BLOCK-NODE."
+  (typep x 'comment-block-node))
+
 (defclass feature-excluded-node (expression-node) ()
   (:documentation "A #+/#- form whose feature expression the reading features
 reject. READ skips it, but it is source text: a :FEATURE-CONDITIONAL
