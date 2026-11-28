@@ -634,7 +634,8 @@ last new form goes after the closing parens that follow it."
                (multiple-value-bind (text state) (lay-out body end)
                  (cond (break
                         ;; what followed on the line starts the next one
-                        (let ((column (if top 0 (next-line-column state 0 :keyword-line (char= (char s after) #\:)))))
+                        (let ((column (if top 0 (next-line-column state 0 :keyword-line (char= (char s after) #\:)
+                                                                          :lambda-keyword-line (char= (char s after) #\&)))))
                           (make-text-edit end (if follow (node-end follow) after)
                                           (concatenate 'string text (input-tail layout)
                                                        (if top (format nil "~%~%") (format nil "~%~A" (spaces column)))
@@ -688,7 +689,8 @@ comment; else NODE stays on the line, after it."
                                :shift (- (node-column node) (input-column layout)))
                (let* ((head (concatenate 'string text (input-tail layout)))
                       (column (if down
-                                  (or sibling (next-line-column state 0 :keyword-line (char= (char s start) #\:)))
+                                  (or sibling (next-line-column state 0 :keyword-line (char= (char s start) #\:)
+                                                                        :lambda-keyword-line (char= (char s start) #\&)))
                                   (+ (node-column node) (length head) 1))))
                  (make-text-edit start (node-end node)
                                  (concatenate 'string head

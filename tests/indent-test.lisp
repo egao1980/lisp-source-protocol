@@ -48,6 +48,35 @@
      ((lines "(loop for x in y" "      when x" "        collect x)") (lines "(loop for x in y" "      when x" "        collect x)")))
   (ok (equal (indent-code input) expected)))
 
+;;; #17: what SLIME does (Emacs 29 + slime-cl-indent.el, indent-region on the
+;;; flush-left input; outputs copied from that oracle).
+(deftest-parametrize slime-lambda-lists-and-specials
+    ((input expected)
+     :ids ("defun-after-key" "defun-plain" "defun-keyword-line" "destructuring-bind"
+           "multiple-value-bind" "defmacro-body" "lambda-optional" "defmethod-qualifier"
+           "unwind-protect" "named-lambda")
+     ((lines "(defun f (a &key (b 1)" "(c 2))" "(foo))")
+      (lines "(defun f (a &key (b 1)" "              (c 2))" "  (foo))"))
+     ((lines "(defun g (a b" "c)" "(foo))")
+      (lines "(defun g (a b" "          c)" "  (foo))"))
+     ((lines "(defun k (a" "&optional b" "c)" "a)")
+      (lines "(defun k (a" "          &optional b" "            c)" "  a)"))
+     ((lines "(destructuring-bind (a b" "c) list" "(foo))")
+      (lines "(destructuring-bind (a b" "                     c) list" "  (foo))"))
+     ((lines "(multiple-value-bind (a b" "c) (values)" "a)")
+      (lines "(multiple-value-bind (a b" "                      c) (values)" "  a)"))
+     ((lines "(defmacro m ((a b) &body" "body)" "body)")
+      (lines "(defmacro m ((a b) &body" "                     body)" "  body)"))
+     ((lines "(lambda (x &optional" "y)" "x)")
+      (lines "(lambda (x &optional" "             y)" "  x)"))
+     ((lines "(defmethod h :around ((a integer)" "b)" "a)")
+      (lines "(defmethod h :around ((a integer)" "                      b)" "  a)"))
+     ((lines "(unwind-protect" "(foo)" "(cleanup))")
+      (lines "(unwind-protect" "     (foo)" "  (cleanup))"))
+     ((lines "(named-lambda walk (x)" "(print x))")
+      (lines "(named-lambda walk (x)" "  (print x))")))
+  (ok (equal expected (indent-code input)) (indent-code input)))
+
 (deftest indent-at-a-column
   (ok (equal (indent-code (lines "(when x" "(f))") :column 4) (lines "(when x" "      (f))")))
   ;; LOOP clauses move with the form
