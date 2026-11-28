@@ -24,17 +24,20 @@ when it is on the operator's line (COND; Emacs (&rest (&whole N …))).")
 
 (defun set-indentation (name spec)
   "Record SPEC for operator NAME. SPEC is an integer, :LOCAL-DEFINITIONS,
-:PRESERVE, (:CLAUSES N), (:REST N), NIL (remove), or a Swank/Emacs list spec
-such as (4 4 &BODY) or (&LAMBDA &BODY): the number of elements before &BODY is
-the distinguished-argument count."
+:PRESERVE, (:CLAUSES N), (:REST N), (:SPECIAL N COLUMN) (N distinguished
+arguments COLUMN in instead of 4, 0.2.8), NIL (remove), or a Swank/Emacs list
+spec such as (4 4 &BODY) or (&LAMBDA &BODY): the number of elements before
+&BODY is the distinguished-argument count, and (5 &BODY) is (:SPECIAL 1 5)."
   (let ((key (string-upcase name))
         (value (cond ((or (integerp spec) (member spec '(:local-definitions :bindings :preserve)) (null spec)
-                          (and (consp spec) (member (first spec) '(:clauses :rest))))
+                          (and (consp spec) (member (first spec) '(:clauses :rest :special))))
                       spec)
                      ((listp spec)
                       (let ((body (position-if (lambda (x) (and (symbolp x) (string-equal x "&BODY")))
                                                spec)))
-                        body))
+                        (if (and (eql body 1) (integerp (first spec)) (> (first spec) 4))
+                            (list :special 1 (first spec))
+                            body)))
                      (t nil))))
     (if value
         (setf (gethash key *indentation*) value)
@@ -55,16 +58,28 @@ the distinguished-argument count."
     ("IGNORE-ERRORS" . 0) ("LAMBDA" . 1) ("LET" . :bindings) ("LET*" . :bindings) ("LOCALLY" . 0) ("LOOP" . :preserve)
     ("MULTIPLE-VALUE-BIND" . 2) ("MULTIPLE-VALUE-PROG1" . 1) ("PROG1" . 1) ("PROG2" . 2)
     ("PROGN" . 0) ("PROGV" . 2) ("RETURN-FROM" . 1) ("SYMBOL-MACROLET" . :bindings)
-    ("TAGBODY" . 0) ("UNLESS" . 1) ("UNWIND-PROTECT" . 1) ("WHEN" . 1)
+    ;; 0.2.8 (#17): SLIME's (5 &body): the protected form 5 in
+    ("TAGBODY" . 0) ("UNLESS" . 1) ("UNWIND-PROTECT" :special 1 5) ("WHEN" . 1)
     ("PRINT-UNREADABLE-OBJECT" . 1) ("DEFTEST" . 1) ("TESTING" . 1)
     ("DEFSYSTEM" . 1) ("DEFINE-CONDITION" . 2) ("DEFCLASS" . 2) ("DEFGENERIC" . 2)
     ("DEFMETHOD" . 2) ("DEFUN" . 2) ("DEFMACRO" . 2) ("DEFTYPE" . 2)
     ("DEFINE-COMPILER-MACRO" . 2) ("DEFSETF" . 2) ("DEFINE-SETF-EXPANDER" . 2)
     ("DEFINE-MODIFY-MACRO" . 2) ("DEFINE-METHOD-COMBINATION" . 2)
+    ;; alexandria
+    ("NAMED-LAMBDA" . 2)
     ;; CFFI: one distinguished argument (the name) unless noted
     ("DEFCSTRUCT" . 1) ("DEFCUNION" . 1) ("DEFCENUM" . 1) ("DEFBITFIELD" . 1)
     ("DEFCTYPE" . 1) ("DEFCVAR" . 1) ("DEFINE-FOREIGN-LIBRARY" . 1)
     ("DEFCFUN" . 2) ("DEFCALLBACK" . 3)))
+
+(defparameter +lambda-list-positions+
+  '(("DEFUN" . 2) ("DEFMACRO" . 2) ("DEFINE-COMPILER-MACRO" . 2) ("DEFGENERIC" . 2)
+    ("DEFTYPE" . 2) ("DEFINE-SETF-EXPANDER" . 2) ("LAMBDA" . 1) ("NAMED-LAMBDA" . 2)
+    ("DESTRUCTURING-BIND" . 1) ("MULTIPLE-VALUE-BIND" . 1))
+  "0.2.8 (#17): operator name → the element index of its lambda list (or
+variable list), which indents as SLIME's &lambda. DEFMETHOD's (and a
+DEFGENERIC (:method …) option's) is its first list argument after the name,
+FLET-like definitions' the element after the name.")
 
 (defun reset-indentation ()
   "Restore *INDENTATION* to the standard table."
@@ -106,11 +121,12 @@ arguments, WITH-* and DO-* take 1."
 (defstruct (indent-frame (:conc-name frame-))
   open-col open-line
   orig-open-col                         ; column of the paren in the input
-  (kind :code)                          ; :code, :data or :local-definitions
+  (kind :code)                          ; :code, :data, :local-definitions, :bindings or :lambda-list
   forced-spec                           ; spec imposed by the parent (FLET definitions)
   head                                  ; operator name, when the head is a symbol token
   (head-kind nil)                       ; :symbol, :keyword or :other
-  (elements '())                        ; (col line keyword-p), newest first
+  (elements '())                        ; (col line keyword-p lambda-keyword-p), newest first
+  (lambda-list-seen nil)                ; DEFMETHOD / (:method …): its lambda list opened
   (pending 0))                          ; prefix forms still to absorb (' #' #+)
 
 (defun frame-element-count (frame) (length (frame-elements frame)))
@@ -124,10 +140,42 @@ arguments, WITH-* and DO-* take 1."
   (or (frame-forced-spec frame)
       (and (eq (frame-head-kind frame) :symbol) (operator-indentation (frame-head frame)))))
 
-(defun line-indent-for (stack base &key old-indent keyword-line)
+(defun lambda-list-line-indent (frame lambda-keyword-line)
+  "0.2.8 (#17): SLIME's default &lambda for a line in lambda-list FRAME (with
+elements). A line starting with a lambda-list keyword aligns one past the
+paren; any other line 2 past the nearest lambda-list keyword before it, or,
+with none, with the first parameter."
+  (if lambda-keyword-line
+      (1+ (frame-open-col frame))
+      (let ((keyword (find-if #'fourth (frame-elements frame))))
+        (if keyword
+            (+ (car keyword) 2)
+            (car (frame-element frame 0))))))
+
+(defun lambda-list-frame-p (parent parent-index grandparent)
+  "True when a list opened as element PARENT-INDEX of PARENT (whose parent is
+GRANDPARENT) is a lambda list (+LAMBDA-LIST-POSITIONS+, DEFMETHOD, a
+(:method …) option, an FLET-like definition)."
+  (and parent parent-index
+       (eq (frame-kind parent) :code)
+       (let ((head (and (frame-head parent) (bare-operator-name (frame-head parent)))))
+         (cond ((null head) nil)
+               ((eq (frame-head-kind parent) :symbol)
+                (let ((position (cdr (assoc head +lambda-list-positions+ :test #'string=))))
+                  (cond (position (eql parent-index position))
+                        ((and (string= head "DEFMETHOD") (>= parent-index 2))
+                         (not (frame-lambda-list-seen parent)))
+                        ((and grandparent (eq (frame-kind grandparent) :local-definitions))
+                         (eql parent-index 1)))))
+               ((and (eq (frame-head-kind parent) :keyword) (string-equal head "METHOD")
+                     (eql (frame-forced-spec parent) 1))
+                (and (>= parent-index 1) (not (frame-lambda-list-seen parent))))))))
+
+(defun line-indent-for (stack base &key old-indent keyword-line lambda-keyword-line)
   "Indentation column for a line whose first element goes into the top frame.
 OLD-INDENT is the line's indentation in the input; KEYWORD-LINE is true when
-the line starts with a keyword."
+the line starts with a keyword, LAMBDA-KEYWORD-LINE when it starts with a
+lambda-list keyword (&key …)."
   (let ((frame (first stack)))
     (if (null frame)
         base
@@ -137,6 +185,9 @@ the line starts with a keyword."
                    (let ((first-arg (frame-element frame 1)))
                      (and first-arg (= (second first-arg) (frame-open-line frame)) first-arg))))
             (cond ((zerop n) (1+ open))
+                  ;; 0.2.8 (#17): lambda lists as SLIME's &lambda
+                  ((eq (frame-kind frame) :lambda-list)
+                   (lambda-list-line-indent frame lambda-keyword-line))
                   ;; Keyword head in code, (:export #:a #:b): a line that starts
                   ;; with a keyword aligns with the head (plist style), any other
                   ;; line with the first argument when it is on the head's line.
@@ -157,6 +208,9 @@ the line starts with a keyword."
                      (cond ((and (consp spec) (eq (first spec) :rest))
                             (let ((first-arg (first-arg-on-open-line)))
                               (if first-arg (car first-arg) (+ open (second spec)))))
+                           ;; (:special N COLUMN): N distinguished arguments COLUMN in
+                           ((and (consp spec) (eq (first spec) :special))
+                            (if (<= n (second spec)) (+ open (third spec)) (+ open 2)))
                            (t
                             (when (consp spec) (setf spec (second spec)))
                             (cond ((and (eq spec :preserve) old-indent)
@@ -203,17 +257,25 @@ frame it belongs to and whether it counts (not absorbed by a prefix)."
                           (decf (frame-pending frame))
                           (incf (frame-pending frame) prefix)
                           (values frame nil))
-                         (t (push (list (col) line-number (char= (char line i) #\:)) (frame-elements frame))
+                         (t (push (list (col) line-number (char= (char line i) #\:) (char= (char line i) #\&))
+                                  (frame-elements frame))
                             (setf (frame-pending frame) prefix)
                             (values frame t)))))
                (push-frame (kind &optional (counted t))
                  (let* ((parent (first stack))
                         (parent-index (and parent (1- (frame-element-count parent))))
                         (parent-kind (and parent (frame-kind parent)))
-                        (parent-spec (and parent (eq parent-kind :code) (frame-spec parent))))
+                        (parent-spec (and parent (eq parent-kind :code) (frame-spec parent)))
+                        ;; 0.2.8 (#17): a lambda list, or a list inside one
+                        (lambda-list (and (not (eq kind :data)) counted
+                                          (or (eq parent-kind :lambda-list)
+                                              (lambda-list-frame-p parent parent-index (second stack))))))
+                   (when (and lambda-list parent (not (eq parent-kind :lambda-list)))
+                     (setf (frame-lambda-list-seen parent) t))
                    (push (make-indent-frame
                           :open-col (col) :orig-open-col (- (col) shift) :open-line line-number
                           :kind (cond ((eq kind :data) :data)
+                                      (lambda-list :lambda-list)
                                       ((and counted (member parent-spec '(:local-definitions :bindings))
                                             (eql parent-index 1))
                                        parent-spec)
@@ -222,7 +284,8 @@ frame it belongs to and whether it counts (not absorbed by a prefix)."
                           ;; binding's value 2 in unless it starts on the binding's
                           ;; line (SLIME's let), a clause like a one-argument
                           ;; operator
-                          :forced-spec (cond ((eq parent-kind :local-definitions) 1)
+                          :forced-spec (cond (lambda-list nil)
+                                             ((eq parent-kind :local-definitions) 1)
                                              ((eq parent-kind :bindings) '(:rest 2))
                                              ((and (consp parent-spec) (eq (first parent-spec) :clauses)
                                                    parent-index (> parent-index (second parent-spec)))
@@ -332,14 +395,17 @@ Second value: the line number of OFFSET. Pass both to INDENT-CODE as
              (incf line))
     (values state line)))
 
-(defun next-line-column (state base &key outer sibling-column old-indent keyword-line)
+(defun next-line-column (state base &key outer sibling-column old-indent keyword-line lambda-keyword-line)
   "Indentation of a line that starts at the end of the indenter's STATE.
 BASE is the column of a top-level line. When the innermost open list is
 OUTER (the context stack INDENT-CODE started from), the line starts an
-element next to the code around it and gets SIBLING-COLUMN when given."
+element next to the code around it and gets SIBLING-COLUMN when given.
+KEYWORD-LINE / LAMBDA-KEYWORD-LINE: the line starts with a keyword / a
+lambda-list keyword (&key …)."
   (if (and sibling-column outer (eq (first state) outer))
       sibling-column
-      (line-indent-for (first state) base :old-indent old-indent :keyword-line keyword-line)))
+      (line-indent-for (first state) base :old-indent old-indent :keyword-line keyword-line
+                                          :lambda-keyword-line lambda-keyword-line)))
 
 (defun indent-code (text &key (column 0) (input-column column) context (first-line 0) sibling-column)
   "TEXT with every line after the first re-indented, as if TEXT started at
@@ -376,7 +442,8 @@ Second value: the indenter state after TEXT, for NEXT-LINE-COLUMN."
                                          (next-line-column state base
                                                            :outer outer :sibling-column sibling-column
                                                            :old-indent old-indent
-                                                           :keyword-line (char= (char trimmed 0) #\:)))))
+                                                           :keyword-line (char= (char trimmed 0) #\:)
+                                                           :lambda-keyword-line (char= (char trimmed 0) #\&)))))
                         (terpri out)
                         (unless blank
                           (write-string (make-string indent :initial-element #\Space) out)
